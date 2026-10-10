@@ -1,0 +1,208 @@
+name: Android
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 27.2.12479018
+  # Command-line tools for the SDK manager (Google's Linux download; the version is pinned).
+  CMDLINE_TOOLS_URL: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+
+jobs:
+  host-tests:
+    name: Host tests (protocol and saved-layout code)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the host-side code
+        run: cargo test -p photocraft-android
+      - name: Test the diagnostic log
+        run: "cargo test -p photocraft-doc --lib diag::"
+      - name: Test the legacy PSD text origin
+        run: "cargo test -p photocraft-text --lib legacy_tysh_point_origin"
+
+  # The interface tests for the touch gestures. The APK job builds the library without its tests, so
+  # these run here; the filters pick the tests of the phone layout, the touch-only gestures, the soft
+  # keyboard on a tap into text, the virtual keyboard and wheel, and the Type options that change every
+  # type layer.
+  ui-tests:
+    name: Interface tests (touch gestures and the phone layout)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the interface tests
+        shell: bash
+        run: |
+          # The step shell exits on the first failing command, so the status is taken directly.
+          status=0
+          filters="color_tests layer_row_ui mobile:: virtual_input:: virtual_mouse:: grown_by_effect_reach diagnostic_log a_tap_into_text_asks_for_the_soft_keyboard"
+          cargo test -p photocraft-ui-egui --lib -- $filters > "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
+          # The Type options of the phone's menu, on every type layer (the engine's tests).
+          cargo test -p photocraft-engine --lib -- the_menu_options_change_every_type_layer >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
+          # The diagnostic log's lines for an open (the engine's tests), so a PSD's open is in the log.
+          cargo test -p photocraft-engine --lib -- an_open_writes_its_decode_and_its_document_to_the_log >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
+          # Save Contents reaches every instance of a smart object that shares its contents (the engine's tests).
+          cargo test -p photocraft-engine --lib -- save_contents_updates_every_instance_that_shares_the_source >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
+          tail -n 150 "$RUNNER_TEMP/ui-tests.log"
+          if [ "$status" -ne 0 ]; then
+            bash .github/scripts/report-failure.sh "Interface tests failed" "$RUNNER_TEMP/ui-tests.log"
+            exit "$status"
+          fi
+
+  apk:
+    name: Build the arm64 debug APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      # Pushing the regenerated Cargo.lock back to the branch (below) needs write access.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install the Android SDK packages
+        shell: bash
+        run: |
+          set -eo pipefail
+          SDK="$HOME/android-sdk"
+          if [ ! -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL -o "$RUNNER_TEMP/cmdline-tools.zip" "$CMDLINE_TOOLS_URL"
+            unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
+            mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          fi
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses > "$RUNNER_TEMP/licenses.log" 2>&1 || true
+          if ! "$SDKMANAGER" --sdk_root="$SDK" "platforms;android-35" "build-tools;35.0.0" "ndk;${NDK_VERSION}" > "$RUNNER_TEMP/sdk.log" 2>&1; then
+            bash .github/scripts/report-failure.sh "Android SDK install failed" "$RUNNER_TEMP/sdk.log"
+            tail -n 40 "$RUNNER_TEMP/sdk.log"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm64
+          # Keep the compiled dependencies even when this build fails, so the next run starts
+          # from them.
+          cache-on-failure: true
+
+      - name: Point Cargo at the NDK's clang
+        shell: bash
+        run: |
+          NDK="$ANDROID_HOME/ndk/$NDK_VERSION"
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -x "$BIN/aarch64-linux-android29-clang" ]; then
+            echo "::error title=NDK missing::no clang at $BIN"
+            ls "$ANDROID_HOME/ndk" || true
+            exit 1
+          fi
+          {
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android29-clang"
+            echo "CC_aarch64_linux_android=$BIN/aarch64-linux-android29-clang"
+            echo "CXX_aarch64_linux_android=$BIN/aarch64-linux-android29-clang++"
+            echo "AR_aarch64_linux_android=$BIN/llvm-ar"
+          } >> "$GITHUB_ENV"
+
+      # If the Android dependencies changed, cargo updates Cargo.lock here, and the lock commit step
+      # records the result. --keep-going reports every crate that fails, not just the first.
+      - name: Build libphotocraft_android.so
+        shell: bash
+        run: |
+          # The step shell exits on the first failing command, so the status is taken directly.
+          status=0
+          cargo build -p photocraft-android --lib --target aarch64-linux-android --profile android \
+            --keep-going --message-format=short > "$RUNNER_TEMP/cargo-build.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/cargo-build.log"
+          if [ "$status" -ne 0 ]; then
+            bash .github/scripts/report-failure.sh "cargo build failed" "$RUNNER_TEMP/cargo-build.log"
+            exit "$status"
+          fi
+
+      - name: Put the library in the APK
+        shell: bash
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/android/libphotocraft_android.so android/app/src/main/jniLibs/arm64-v8a/
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build the debug APK
+        shell: bash
+        run: |
+          status=0
+          gradle -p android :app:assembleDebug --no-daemon > "$RUNNER_TEMP/gradle.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/gradle.log"
+          if [ "$status" -ne 0 ]; then
+            bash .github/scripts/report-failure.sh "Gradle build failed" "$RUNNER_TEMP/gradle.log"
+            exit "$status"
+          fi
+
+      - name: Describe what Gradle built
+        if: always()
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/build-tree.txt"
+          {
+            echo "java sources:"; find android/app/src/main/java -type f
+            echo "class files:"; find android/app/build -name '*.class' 2>/dev/null | head -n 40
+            echo "dex files:"; find android/app/build -name '*.dex' -exec ls -l {} + 2>/dev/null
+            echo "apk:"; unzip -l android/app/build/outputs/apk/debug/app-debug.apk 2>/dev/null
+            echo "dex strings:"; unzip -p android/app/build/outputs/apk/debug/app-debug.apk classes.dex 2>/dev/null | strings -n 6 | head -n 25
+          } > "$out" 2>&1 || true
+          bash .github/scripts/notice-file.sh "build tree" "$out"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-android-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Commit the Cargo.lock that built
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already matches the build."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Update Cargo.lock for the Android dependencies [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning title=Cargo.lock::could not push the regenerated Cargo.lock (another push landed first?)"
+
+      - name: Check the APK's contents
+        env:
+          APK: android/app/build/outputs/apk/debug/app-debug.apk
+        run: |
+          bash .github/scripts/inspect-apk.sh "$APK" \
+            "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" \
+            "$ANDROID_HOME/build-tools/35.0.0/aapt2"

@@ -1,0 +1,12 @@
+*~
+/target
+/corpus
+/log
+/temp
+/secrets
+# Android build output and the native library copied in by the build (see README.md)
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/app/src/main/jniLibs/
+/android/local.properties

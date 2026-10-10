@@ -1,0 +1,43 @@
+[package]
+name = "photocraft-android"
+description = "PhotoDroid (PhotoCraft for Android): open-source Android photo & PSD image editor in pure Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["android", "photo-editor", "image-editor", "photoshop", "psd"]
+categories = ["multimedia::images", "gui", "os::android-apis"]
+publish = false
+
+[lib]
+name = "photocraft_android"
+# cdylib: the library the activity loads (libphotocraft_android.so). rlib: lets `cargo test` run the
+# host-side code (protocol parsing, saved-layout checks, crash guard) without an Android toolchain.
+crate-type = ["cdylib", "rlib"]
+
+# The workspace forbids `unsafe`. This crate is the only exception, and only for the JNI call that
+# reaches the Activity (src/platform.rs) and the `android_main` export. Keep it that way.
+[lints.rust]
+unsafe_code = "deny"
+
+[dependencies]
+log = { workspace = true }
+# Reads the saved window layout (eframe persistence) to drop values that would abort startup.
+ron = "0.12"
+
+[target.'cfg(target_os = "android")'.dependencies]
+photocraft-codecs = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-engine = { workspace = true }
+photocraft-format = { workspace = true }
+photocraft-io = { workspace = true }
+photocraft-ui-egui = { workspace = true }
+# No `accesskit`: eframe rejects it with the NativeActivity backend (see ui-egui/Cargo.toml).
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence", "android-native-activity"] }
+egui = { workspace = true }
+# The same winit as eframe's (its `activity` module provides the AndroidApp type).
+winit = { version = "0.30.13", default-features = false, features = ["android-native-activity"] }
+# The JNI version android-activity 0.6 uses. Sharing it means `JavaVM::singleton()` is the VM that
+# android-activity set up before `android_main`.
+jni = "0.22"
+android_logger = "0.15"

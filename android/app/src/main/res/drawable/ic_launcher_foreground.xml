@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PhotoDroid launcher icon foreground: an original robot head with the "Ps" logotype, from android/icon/ic_launcher.svg
+     (vector drawables have no drop shadow, so it is left out here), scaled to sit inside the launcher's safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+
+    <group
+        android:pivotX="256"
+        android:pivotY="256"
+        android:scaleX="0.9"
+        android:scaleY="0.9">
+
+        <!-- Antenna and its light. -->
+        <path
+            android:strokeColor="#FF3A3D45"
+            android:strokeWidth="10"
+            android:strokeLineCap="round"
+            android:pathData="M256,124 V80" />
+        <path
+            android:fillColor="#FF31A8FF"
+            android:pathData="M242,72 A14,14 0 1 1 270,72 A14,14 0 1 1 242,72 Z" />
+
+        <!-- Ears. -->
+        <path
+            android:fillColor="#FF1E2024"
+            android:strokeColor="#FF3A3D45"
+            android:strokeWidth="1.2"
+            android:pathData="M112,192 A12,12 0 0 1 124,180 H124 A12,12 0 0 1 136,192 V234 A12,12 0 0 1 124,246 H124 A12,12 0 0 1 112,234 Z M376,192 A12,12 0 0 1 388,180 H388 A12,12 0 0 1 400,192 V234 A12,12 0 0 1 388,246 H388 A12,12 0 0 1 376,234 Z" />
+
+        <!-- Head. -->
+        <path
+            android:fillColor="#FF1E2024"
+            android:strokeColor="#FF3A3D45"
+            android:strokeWidth="1.2"
+            android:pathData="M136,180 A56,56 0 0 1 192,124 H320 A56,56 0 0 1 376,180 V218 A56,56 0 0 1 320,274 H192 A56,56 0 0 1 136,218 Z" />
+
+        <!-- Face visor and eyes. -->
+        <path
+            android:fillColor="#FF0C0D0E"
+            android:pathData="M168,184 A24,24 0 0 1 192,160 H320 A24,24 0 0 1 344,184 V214 A24,24 0 0 1 320,238 H192 A24,24 0 0 1 168,214 Z" />
+        <path
+            android:fillColor="#FF31A8FF"
+            android:pathData="M202,199 A12,12 0 1 1 226,199 A12,12 0 1 1 202,199 Z M286,199 A12,12 0 1 1 310,199 A12,12 0 1 1 286,199 Z" />
+
+        <!-- Body, with the "Ps" logotype on it. -->
+        <path
+            android:fillColor="#FF1E2024"
+            android:strokeColor="#FF3A3D45"
+            android:strokeWidth="1.2"
+            android:pathData="M168,322 A36,36 0 0 1 204,286 H308 A36,36 0 0 1 344,322 V374 A36,36 0 0 1 308,410 H204 A36,36 0 0 1 168,374 Z" />
+        <group android:translateY="90">
+            <path
+                android:fillColor="#FF31A8FF"
+                android:pathData="M201,295 V222 H232 C247,222 256,231 256,244 C256,257 247,266 232,266 H217 V295 H201 Z M217,235 V252 H231 C238,252 242,248 242,244 C242,239 238,235 231,235 Z" />
+            <path
+                android:fillColor="#FF31A8FF"
+                android:pathData="M310,256 H296 C296,250.5 291.5,247 285.5,247 C279.5,247 275.5,250 275.5,254.5 C275.5,259 279.5,261 286.5,263 L292,264.5 C303,268 310,274 310,282.5 C310,292.5 300.5,298 286,298 C271.5,298 263.5,291 262,280 H276 C276.5,285 280.5,288 286,288 C292,288 296,285 296,281 C296,276.5 292,274.5 285.5,272.5 L280,271 C269.5,267.5 263.5,262.5 263.5,254.5 C263.5,244.5 272.5,237.5 285.5,237.5 C298.5,237.5 307.5,244.5 310,256 Z" />
+        </group>
+    </group>
+</vector>
