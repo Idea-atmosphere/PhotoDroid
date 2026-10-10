@@ -1,0 +1,5 @@
+// Top-level build file. The app module holds the Android code; the native library is built by
+// Cargo (see README.md) and copied into app/src/main/jniLibs/arm64-v8a/ before packaging.
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}

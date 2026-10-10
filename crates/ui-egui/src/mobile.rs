@@ -1,0 +1,765 @@
+//! The phone layout: the same editor, arranged for a narrow touch screen.
+//!
+//! On a phone the desktop chrome (menu bar, options bar, tool column, status bar, dock) leaves
+//! almost no room for the picture. This layout keeps the same panels in other places:
+//!
+//! - a top bar: the menus button, the document's name and status line, undo, redo, the toggles of
+//!   the virtual mouse and the virtual keyboard, and the panels button;
+//! - at the bottom, when the keyboard is on, the virtual keyboard ([`crate::virtual_input`]); then
+//!   the options of the active tool, and under them a strip of every tool, with 44 pt touch targets
+//!   (a button that holds several tools lists them on a long press). The virtual mouse is a pointer
+//!   on the canvas, which a finger moves ([`crate::virtual_mouse`]);
+//! - above those, when the panels button is on, a sheet with the dock's groups (Layers, History,
+//!   Colour, Properties, Navigator);
+//! - the menus, as a sheet over the picture: one menu to a page (a back button returns), with a search
+//!   field that lists the matching commands.
+//!
+//! The canvas takes the room that is left. Each part draws the same code as the desktop, and the
+//! behaviour is the same, except where a touch screen needs other gestures on this layout: a press
+//! held down does a double-click's job ([`held_or_double`]), and a row or swatch under a finger
+//! takes clicks only, so that a swipe scrolls the list ([`touch_screen`]). The layout is used when
+//! the shell asks for it ([`PhotocraftApp::phone_layout`], set on Android) and the window's shorter
+//! side is under [`PHONE_MAX_SIDE`]. Desktop and web windows keep their chrome and their mouse.
+
+use egui::{Align, Frame, Layout, Margin, RichText, Sense, Stroke, Vec2, vec2};
+use serde_json::json;
+
+use crate::dock::Group;
+use crate::theme::{self, Tokens};
+use crate::{PhotocraftApp, i18n, icons, menus, notices, panels, virtual_input};
+
+/// A window whose shorter side is under this many points gets the phone layout.
+pub const PHONE_MAX_SIDE: f32 = 600.0;
+/// A touch target: 44 points, the smallest size the platforms recommend.
+const TOUCH: f32 = 44.0;
+/// The top bar's height.
+pub(crate) const TOP_BAR: f32 = 48.0;
+/// The options row's height.
+const OPTIONS_ROW: f32 = 44.0;
+/// The tool strip's height: a touch target and its margins.
+const TOOL_STRIP: f32 = 56.0;
+
+/// The panel groups the sheet offers: the group, its icon and its name.
+const SHEET_GROUPS: [(Group, &str, &str); 5] = [
+    (Group::Layers, "layers", "Layers"),
+    (Group::History, "clock", "History"),
+    (Group::Color, "palette", "Color & Swatches"),
+    (Group::Properties, "sliders-horizontal", "Properties"),
+    (Group::Navigator, "navigation", "Navigator"),
+];
+
+/// Does a window of this size get the phone layout? Its shorter side must be under
+/// [`PHONE_MAX_SIDE`], in either orientation.
+pub fn fits_phone(size: Vec2) -> bool {
+    size.x.min(size.y) < PHONE_MAX_SIDE
+}
+
+/// Is the phone layout in use for this frame?
+pub fn active(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    // The whole window, system bars included: the threshold is the window's size, not the room
+    // left between the bars.
+    app.phone_layout && fits_phone(ctx.viewport_rect().size())
+}
+
+/// The key of the flag that says whether the touch gestures are on this frame (see [`set_gestures`]).
+fn gestures_key() -> egui::Id {
+    egui::Id::new("photocraft-phone-gestures")
+}
+
+/// Records whether the touch gestures are on this frame: `lib.rs` sets it to the phone layout each
+/// frame. The gestures below apply only then, so the desktop, the web and a tablet's desktop chrome
+/// keep the mouse's behaviour, even on a touch screen.
+pub fn set_gestures(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(gestures_key(), on));
+}
+
+/// Are the touch gestures on this frame? See [`set_gestures`].
+pub fn gestures_on(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(gestures_key())).unwrap_or(false)
+}
+
+/// Is a finger on the phone's screen? egui knows it has a touch screen once it has had a touch, and
+/// keeps the knowledge. On one, the rows, eyes and swatches take clicks only ([`row_sense`]): a drag
+/// there would take the swipe that scrolls the list, reorder the row, sweep the visibility of the
+/// eyes it passes over, or drop the swatch.
+pub fn touch_screen(ctx: &egui::Context) -> bool {
+    gestures_on(ctx) && ctx.input(|i| i.has_touch_screen())
+}
+
+/// The sense of a list row, an eye or a swatch: a drag where a mouse has one (it reorders, moves or
+/// drops the row), a click alone on a touch screen. There a finger's drag takes the press before the
+/// list's scroll can, so a swipe over the rows would not scroll the list.
+pub fn row_sense(ctx: &egui::Context) -> Sense {
+    if touch_screen(ctx) { Sense::click() } else { Sense::click_and_drag() }
+}
+
+/// Does this response ask for its second-tap action? With a mouse that is a double-click. On a touch
+/// screen the second tap often comes too late to count as one (egui allows 0.3 s between the two),
+/// so a press held down does the same job instead. egui reports a long press only for touches, so a
+/// mouse keeps the double-click alone. A widget with a context menu keeps the double-click too, as a
+/// long press there opens the menu.
+pub fn held_or_double(ctx: &egui::Context, resp: &egui::Response) -> bool {
+    resp.double_clicked() || (resp.long_touched() && gestures_on(ctx))
+}
+
+/// Draw the phone chrome. It goes where the desktop chrome goes, before the canvas.
+pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // Bottom panels stack upwards in the order they are added: the virtual keyboard (when it is on)
+    // sits at the foot of the screen, the tool strip above it, the options above that, and the sheet
+    // above those. The keys are drawn again above a dialog or the menu, which dim the screen.
+    let covered = !app.ui.dialogs.is_empty() || is_set(ui.ctx(), menu_open_id());
+    app.virtual_mouse.set_covered(covered);
+    virtual_input::panel(app, ui, covered);
+    tool_strip(app, ui);
+    options(app, ui);
+    sheet(app, ui);
+    top_bar(app, ui);
+    menu(app, ui.ctx());
+    app.virtual_mouse.overlay(ui.ctx());
+}
+
+// The phone chrome's state lives in egui's memory: none of it is saved with the document.
+
+fn sheet_open_id() -> egui::Id {
+    egui::Id::new("phone-sheet-open")
+}
+
+fn sheet_group_id() -> egui::Id {
+    egui::Id::new("phone-sheet-group")
+}
+
+fn menu_open_id() -> egui::Id {
+    egui::Id::new("phone-menu-open")
+}
+
+fn menu_query_id() -> egui::Id {
+    egui::Id::new("phone-menu-query")
+}
+
+fn is_set(ctx: &egui::Context, id: egui::Id) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false)
+}
+
+fn set_flag(ctx: &egui::Context, id: egui::Id, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(id, on));
+}
+
+fn top_bar_rect_id() -> egui::Id {
+    egui::Id::new("phone-top-bar-rect")
+}
+
+/// The top bar's rectangle as it was last drawn (`None` before the first frame of the phone layout).
+pub fn top_bar_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp::<egui::Rect>(top_bar_rect_id()))
+}
+
+/// The top bar: menus, the document's name, undo, redo, the virtual mouse and keyboard toggles, and the
+/// panels button.
+fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let ctx = ui.ctx().clone();
+    let (menu_open, sheet_open) = (is_set(&ctx, menu_open_id()), is_set(&ctx, sheet_open_id()));
+    let (mouse_on, keys_on, lens_on) = (app.virtual_mouse.is_on(), app.virtual_input.keyboard_on(), app.virtual_mouse.magnifier_on());
+    let title = app
+        .session
+        .active()
+        .map(|d| format!("{}{}", d.doc.name, if d.is_dirty() { "  •" } else { "" }))
+        .unwrap_or_else(|| "PhotoDroid".into());
+    let status = app.ui.status.clone();
+    let can_undo = menus::is_enabled(app, "edit.undo");
+    let can_redo = menus::is_enabled(app, "edit.redo");
+    let (mut toggle_menu, mut toggle_sheet) = (false, false);
+    let (mut toggle_mouse, mut toggle_keys, mut toggle_lens) = (false, false, false);
+    let mut run: Option<&str> = None;
+    egui::Panel::top("phone-top")
+        .exact_size(TOP_BAR)
+        .frame(Frame::NONE.fill(t.chrome).inner_margin(Margin::symmetric(4, 0)))
+        .show(ui, |ui| {
+            // Remembered for the next frame's input: the virtual mouse keeps the bar's touches off the canvas.
+            ctx.data_mut(|d| d.insert_temp(top_bar_rect_id(), ui.max_rect()));
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                toggle_menu = icons::button(ui, "align-justify", TOUCH, menu_open, tl!("Menu")).clicked();
+                // The name, and the status line under it, take the room the buttons leave.
+                // The magnifier's toggle shows only while the pointer is on: the title keeps the room it can.
+                let buttons = if mouse_on { 6.0 } else { 5.0 };
+                let name_w = (ui.available_width() - buttons * (TOUCH + 2.0)).max(0.0);
+                ui.vertical(|ui| {
+                    ui.set_width(name_w);
+                    ui.add(egui::Label::new(RichText::new(title.as_str()).font(theme::medium(14.0)).color(t.text)).truncate());
+                    if !status.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(status.as_str()).size(11.0).color(t.text_faint)).truncate());
+                    }
+                });
+                let _ = ui.add_enabled_ui(can_undo, |ui| {
+                    if icons::button(ui, "undo-2", TOUCH, false, tl!("Undo")).clicked() {
+                        run = Some("edit.undo");
+                    }
+                });
+                let _ = ui.add_enabled_ui(can_redo, |ui| {
+                    if icons::button(ui, "redo-2", TOUCH, false, tl!("Redo")).clicked() {
+                        run = Some("edit.redo");
+                    }
+                });
+                toggle_mouse = toggle_button(ui, "mouse-pointer-2", mouse_on, tl!("Virtual mouse"));
+                if mouse_on {
+                    toggle_lens = toggle_button(ui, "search", lens_on, tl!("Magnifier"));
+                }
+                toggle_keys = toggle_button(ui, "keyboard", keys_on, tl!("Virtual keyboard"));
+                toggle_sheet = icons::button(ui, "layers", TOUCH, sheet_open, tl!("Panels")).clicked();
+            });
+        });
+    if toggle_menu {
+        set_flag(&ctx, menu_open_id(), !menu_open);
+        // Whichever way the button goes, the sheet starts on the top menus.
+        ctx.data_mut(|d| d.insert_temp(menu_path_id(), Vec::<String>::new()));
+    }
+    if toggle_sheet {
+        set_flag(&ctx, sheet_open_id(), !sheet_open);
+    }
+    if toggle_mouse {
+        let canvas = app.last_canvas_rect;
+        app.virtual_mouse.toggle(canvas);
+    }
+    if toggle_lens {
+        let canvas = app.last_canvas_rect;
+        app.virtual_mouse.toggle_magnifier(canvas);
+    }
+    if toggle_keys {
+        app.virtual_input.toggle_keyboard();
+    }
+    if let Some(id) = run {
+        let _ = app.run(id, json!({}));
+    }
+}
+
+/// A top-bar button that is a switch: it shows whether it is on, to a screen reader too. Returns whether it
+/// was pressed.
+fn toggle_button(ui: &mut egui::Ui, icon: &str, on: bool, tooltip: &str) -> bool {
+    let resp = icons::button(ui, icon, TOUCH, on, tooltip);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tooltip));
+    resp.clicked()
+}
+
+/// The strip of every tool, sideways-scrolling, Photoshop's order with a divider between sections.
+/// A button that holds several tools shows the one last used, and lists the others on a long press.
+fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    egui::Panel::bottom("phone-tools")
+        .exact_size(TOOL_STRIP)
+        .frame(Frame::NONE.fill(t.chrome).inner_margin(Margin::symmetric(4, 6)))
+        .show(ui, |ui| {
+            let r = ui.max_rect();
+            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
+            egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    // The same slot keys as the desktop toolbar, so both remember the last tool used.
+                    let mut slot_index = 0usize;
+                    for (si, section) in panels::TOOL_SECTIONS.iter().enumerate() {
+                        if si > 0 {
+                            ui.add_space(3.0);
+                            let (rect, _) = ui.allocate_exact_size(vec2(1.0, TOUCH - 8.0), Sense::hover());
+                            ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, t.separator));
+                            ui.add_space(3.0);
+                        }
+                        for slot in section.iter() {
+                            let key = egui::Id::new(("tool-slot", slot_index));
+                            slot_index += 1;
+                            let tool = panels::slot_tool(ui, app.ui.tool, slot, key);
+                            let selected = slot.contains(&app.ui.tool);
+                            let resp = icons::button(ui, icons::tool_icon(tool), TOUCH, selected, tl!(tool.label()));
+                            if slot.len() > 1 {
+                                // A corner mark: this button holds several tools.
+                                let r = resp.rect;
+                                let corner = vec![
+                                    r.right_bottom() + vec2(-2.0, -2.0),
+                                    r.right_bottom() + vec2(-8.0, -2.0),
+                                    r.right_bottom() + vec2(-2.0, -8.0),
+                                ];
+                                ui.painter().add(egui::Shape::convex_polygon(corner, t.text_faint, Stroke::NONE));
+                            }
+                            if resp.clicked() {
+                                app.ui.tool = tool;
+                            }
+                            if slot.len() > 1 {
+                                egui::Popup::context_menu(&resp).show(|ui| {
+                                    ui.set_min_width(200.0);
+                                    for &item in slot.iter() {
+                                        if ui.add(egui::Button::selectable(item == tool, tl!(item.label()))).clicked() {
+                                            app.ui.tool = item;
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+        });
+}
+
+/// The active tool's options, in a row as wide as the screen. The row scrolls sideways, and its
+/// width is the screen's, so a control pinned to its right end (a transform's Commit, say) stays
+/// on screen while the other options scroll.
+fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    egui::Panel::bottom("phone-options")
+        .exact_size(OPTIONS_ROW)
+        .frame(Frame::NONE.fill(t.chrome).inner_margin(Margin::symmetric(6, 0)))
+        .show(ui, |ui| {
+            // The desktop bar's separators: the strip is drawn between two rules.
+            let r = ui.max_rect();
+            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
+            ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
+            let visible = ui.available_width();
+            egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
+                ui.set_width(visible);
+                panels::options_strip(app, ui);
+            });
+        });
+}
+
+/// The panels sheet: one dock group at a time, chosen with the icons along its top.
+fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    if !is_set(&ctx, sheet_open_id()) {
+        return;
+    }
+    let t = Tokens::get(&ctx);
+    let group = ctx.data(|d| d.get_temp::<Group>(sheet_group_id())).unwrap_or(Group::Layers);
+    let screen = ctx.content_rect().height();
+    let (mut pick, mut close) = (None, false);
+    egui::Panel::bottom("phone-sheet")
+        .resizable(true)
+        .default_size((screen * 0.4).max(220.0))
+        .size_range(220.0..=(screen * 0.85).max(260.0))
+        .frame(Frame::NONE.fill(t.dock).inner_margin(Margin::same(6)))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (g, icon, name) in SHEET_GROUPS {
+                    if icons::button(ui, icon, TOUCH, group == g, tl!(name)).clicked() {
+                        pick = Some(g);
+                    }
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if icons::button(ui, "chevron-down", TOUCH, false, tl!("Hide panels")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+            crate::dock::show(app, ui, &[group], panels::dock_body);
+        });
+    if close {
+        set_flag(&ctx, sheet_open_id(), false);
+    }
+    if let Some(g) = pick {
+        ctx.data_mut(|d| d.insert_temp(sheet_group_id(), g));
+    }
+}
+
+/// The menu sheet's rows: a finger's target, with room for a second line under the label.
+const MENU_ROW: f32 = 52.0;
+
+/// The menus, as a sheet over the picture, one menu to a page: the top menus first, then a menu's own
+/// commands and its submenus, and each submenu on a page of its own. A back button returns to the page
+/// before. A search lists the matching commands instead, each with the menus it lives in. A command runs
+/// and closes the sheet.
+fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !is_set(ctx, menu_open_id()) {
+        return;
+    }
+    let lang = i18n::current();
+    let items = menus::menu_items(app);
+    let mut query: String = ctx.data(|d| d.get_temp::<String>(menu_query_id())).unwrap_or_default();
+    let mut path: Vec<String> = ctx.data(|d| d.get_temp::<Vec<String>>(menu_path_id())).unwrap_or_default();
+    let mut picked: Option<String> = None;
+    let mut close = false;
+    let screen = ctx.content_rect();
+    let t = Tokens::get(ctx);
+    let sheet = egui::Id::new("phone-menu");
+    // At the foot of the screen and as wide as it, so that a thumb reaches every row; above the
+    // virtual keyboard when that is on.
+    let lift = virtual_input::lift(app);
+    let area = egui::Modal::default_area(sheet).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -8.0 - lift));
+    let modal = egui::Modal::new(sheet).area(area).show(ctx, |ui| {
+        ui.set_width(dialog_room(screen.size()));
+        ui.set_max_height((screen.height() * 0.8 - lift).max(260.0));
+        let searching = !query.trim().is_empty();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if !searching && !path.is_empty() && back_button(ui, tl!("Back")) {
+                path.pop();
+            }
+            let title = if searching {
+                tl!("Search").to_string()
+            } else if let Some(name) = path.last() {
+                i18n::tr(lang, name).to_string()
+            } else {
+                tl!("Menu").to_string()
+            };
+            ui.label(RichText::new(title).font(theme::semibold(15.0)).color(t.text));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if icons::button(ui, "x", TOUCH, false, tl!("Close menu")).clicked() {
+                    close = true;
+                }
+            });
+        });
+        let field = ui.available_width();
+        ui.add_sized(vec2(field, TOUCH), egui::TextEdit::singleline(&mut query).hint_text(tl!("Search commands")));
+        ui.separator();
+        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+            let needle = query.trim();
+            if needle.is_empty() {
+                let page = menu_page(&items, &path);
+                for item in &page.commands {
+                    command_row(ui, item, lang, &mut picked, "");
+                }
+                for name in &page.submenus {
+                    if menu_row(ui, i18n::tr(lang, name), "", false, true, true).clicked() {
+                        path.push(name.clone());
+                    }
+                }
+            } else {
+                let hits = menus::search_items(&items, needle, lang);
+                if hits.is_empty() {
+                    ui.add_space(12.0);
+                    ui.label(RichText::new(tl!("No commands match")).color(t.text_faint));
+                }
+                for item in hits {
+                    let trail: Vec<&str> = item.path.iter().map(|p| i18n::tr(lang, p)).collect();
+                    command_row(ui, item, lang, &mut picked, &trail.join(" › "));
+                }
+            }
+        });
+    });
+    ctx.data_mut(|d| d.insert_temp(menu_query_id(), query));
+    ctx.data_mut(|d| d.insert_temp(menu_path_id(), path));
+    if let Some(cmd) = picked {
+        close = true;
+        if let Err(e) = menus::invoke(app, ctx, &cmd, menu_params(&cmd)) {
+            let _ = notices::post(app, "PhotoDroid", vec![e], true, None);
+        }
+    }
+    if close || modal.should_close() {
+        set_flag(ctx, menu_open_id(), false);
+        ctx.data_mut(|d| d.insert_temp(menu_path_id(), Vec::<String>::new()));
+    }
+}
+
+/// The menu sheet's page: the menus it has opened, outermost first (empty: the top menus).
+fn menu_path_id() -> egui::Id {
+    egui::Id::new("phone-menu-path")
+}
+
+/// What one page of the menu sheet lists: the commands whose menu path is exactly the page's, and the
+/// submenus directly under it.
+struct MenuPage<'a> {
+    commands: Vec<&'a menus::MenuItem>,
+    submenus: Vec<String>,
+}
+
+/// The page at the menu path `at` (empty: the top menus). The top menus come in the order of
+/// [`menus::TOP_MENUS`]; a submenu's come in the order its commands do.
+fn menu_page<'a>(items: &'a [menus::MenuItem], at: &[String]) -> MenuPage<'a> {
+    let commands: Vec<&menus::MenuItem> = items.iter().filter(|i| i.path.as_slice() == at).collect();
+    let mut submenus: Vec<String> = Vec::new();
+    if at.is_empty() {
+        for top in menus::TOP_MENUS {
+            if items.iter().any(|i| i.path.first().map(String::as_str) == Some(top)) {
+                submenus.push(top.to_string());
+            }
+        }
+    } else {
+        for item in items.iter().filter(|i| i.path.len() > at.len() && i.path.starts_with(at)) {
+            let name = &item.path[at.len()];
+            if !submenus.contains(name) {
+                submenus.push(name.clone());
+            }
+        }
+    }
+    MenuPage { commands, submenus }
+}
+
+/// One row of the menu sheet, a full-width touch target: the label, a line under it (a search result's
+/// menus), a tick where the command is checked, and a chevron where the row opens a page.
+fn menu_row(ui: &mut egui::Ui, label: &str, detail: &str, checked: bool, enabled: bool, submenu: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    if enabled && resp.hovered() {
+        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
+    }
+    let ink = if enabled { t.text } else { t.text_faint };
+    let mut x = rect.left() + 14.0;
+    if checked {
+        let tick = egui::Rect::from_center_size(egui::pos2(x + 8.0, rect.center().y), vec2(16.0, 16.0));
+        icons::paint(ui, tick, "check", 16.0, t.accent);
+        x += 26.0;
+    }
+    let painter = ui.painter();
+    if detail.is_empty() {
+        painter.text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, label, theme::medium(15.0), ink);
+    } else {
+        painter.text(egui::pos2(x, rect.top() + 17.0), egui::Align2::LEFT_CENTER, label, theme::medium(14.0), ink);
+        let font = egui::FontId::proportional(11.5);
+        painter.text(egui::pos2(x, rect.top() + 37.0), egui::Align2::LEFT_CENTER, detail, font, t.text_faint);
+    }
+    if submenu {
+        chevron(painter, egui::pos2(rect.right() - 18.0, rect.center().y), true, t.text_dim);
+    }
+    painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
+    resp
+}
+
+/// A chevron pointing forward (a submenu's row) or back (a page's back button).
+fn chevron(painter: &egui::Painter, at: egui::Pos2, forward: bool, color: egui::Color32) {
+    let s = if forward { 1.0 } else { -1.0 };
+    let stroke = Stroke::new(1.6, color);
+    painter.line_segment([at + vec2(-4.0 * s, -6.0), at + vec2(4.0 * s, 0.0)], stroke);
+    painter.line_segment([at + vec2(4.0 * s, 0.0), at + vec2(-4.0 * s, 6.0)], stroke);
+}
+
+/// A page's back button: a touch target with a chevron pointing back. True when it is pressed.
+fn back_button(ui: &mut egui::Ui, tooltip: &str) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(TOUCH, TOUCH), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
+    }
+    chevron(ui.painter(), rect.center(), false, t.text);
+    resp.on_hover_text(tooltip).clicked()
+}
+
+/// A command's row in the menu sheet. A command the sheet cannot run is shown dimmed and does nothing.
+fn command_row(ui: &mut egui::Ui, item: &menus::MenuItem, lang: i18n::Lang, picked: &mut Option<String>, detail: &str) {
+    let enabled = item.enabled;
+    let label = i18n::tr(lang, &item.label);
+    if menu_row(ui, label, detail, item.checked == Some(true), enabled, false).clicked() && enabled {
+        *picked = Some(item.id.clone());
+    }
+}
+
+/// The width a dialog may take on the phone: the screen less a margin on each side, and at least 200 points.
+pub fn dialog_room(screen: Vec2) -> f32 {
+    (screen.x - 24.0).max(200.0)
+}
+
+/// A dialog's width: `desired`, or the room the phone's screen leaves it when that is less. Off the phone
+/// (`room` is `None`) it is `desired`.
+pub fn fit_width(desired: f32, room: Option<f32>) -> f32 {
+    room.map_or(desired, |r| desired.min(r))
+}
+
+/// The parameters the phone's menu passes a command. Its Type options (Anti-Alias, Orientation,
+/// OpenType) change every type layer of the document, as a PSD's texts are meant to share them;
+/// the desktop menus pass nothing and change the active layer only.
+fn menu_params(id: &str) -> serde_json::Value {
+    if id.starts_with("type.antiAlias.") || id.starts_with("type.orientation.") || id.starts_with("type.openType.") {
+        json!({"allTextLayers": true})
+    } else {
+        json!({})
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Whether the phone's fonts are bound yet: the first frame of a harness runs before `setup_context`
+    /// takes effect, so a test draws nothing until they are (as the app draws nothing until its fonts are ready).
+    fn fonts_bound(ctx: &egui::Context) -> bool {
+        ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into())))
+    }
+
+    #[test]
+    fn the_top_bar_toggles_the_virtual_keyboard_and_the_virtual_mouse() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder()
+            .with_size(vec2(411.0, 300.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| if fonts_bound(ui.ctx()) { top_bar(app, ui) }, app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("Virtual keyboard").click();
+        h.run_steps(2);
+        assert!(h.state().virtual_input.keyboard_on());
+        assert!(!h.state().virtual_mouse.is_on());
+        h.get_by_label("Virtual mouse").click();
+        h.run_steps(2);
+        assert!(h.state().virtual_mouse.is_on());
+        h.get_by_label("Virtual keyboard").click();
+        h.run_steps(2);
+        assert!(!h.state().virtual_input.keyboard_on());
+        assert!(h.state().virtual_mouse.is_on(), "each toggle is its own");
+    }
+
+    #[test]
+    fn the_top_bar_magnifier_turns_the_loupe_on_with_the_pointer() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder()
+            .with_size(vec2(411.0, 300.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| if fonts_bound(ui.ctx()) { top_bar(app, ui) }, app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("Virtual mouse").click();
+        h.run_steps(2);
+        assert!(h.state().virtual_mouse.is_on());
+        h.get_by_label("Magnifier").click();
+        h.run_steps(2);
+        assert!(h.state().virtual_mouse.magnifier_on(), "the top bar's magnifier turns the loupe on");
+        h.get_by_label("Magnifier").click();
+        h.run_steps(2);
+        assert!(!h.state().virtual_mouse.magnifier_on(), "the second tap turns the loupe off");
+        assert!(h.state().virtual_mouse.is_on(), "and the pointer stays on");
+    }
+
+    #[test]
+    fn a_key_of_the_virtual_keyboard_queues_its_text_for_the_next_frame() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.virtual_input.set_keyboard(true);
+        let mut h = Harness::builder()
+            .with_size(vec2(411.0, 600.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) {
+                    virtual_input::panel(app, ui, false)
+                }
+            }, app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("q").click();
+        h.run_steps(2);
+        let typed: Vec<String> =
+            h.state().virtual_input.queued().iter().filter_map(|e| if let egui::Event::Text(t) = e { Some(t.clone()) } else { None }).collect();
+        assert_eq!(typed, ["q"]);
+    }
+
+    #[test]
+    fn a_narrow_window_is_a_phone_in_either_orientation() {
+        assert!(fits_phone(vec2(411.0, 891.0)));
+        assert!(fits_phone(vec2(891.0, 411.0)));
+        // Tablets and desktop windows keep the desktop chrome.
+        assert!(!fits_phone(vec2(800.0, 1280.0)));
+        assert!(!fits_phone(vec2(1440.0, 900.0)));
+    }
+
+    fn a_finger_lands() -> egui::Event {
+        egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(0), phase: egui::TouchPhase::Start, pos: egui::pos2(1.0, 1.0), force: None }
+    }
+
+    /// One frame of `ctx`, with the touch gestures on or off as the phone layout sets them. A test has
+    /// no renderer for the textures the frame makes, so they are cleared: epaint panics in a debug
+    /// build when they are dropped unapplied.
+    fn frame(ctx: &egui::Context, phone: bool, input: egui::RawInput, mut body: impl FnMut(&mut egui::Ui)) {
+        let mut out = ctx.run_ui(input, |ui| {
+            set_gestures(ui.ctx(), phone);
+            body(ui);
+        });
+        out.textures_delta.clear();
+    }
+
+    /// egui learns of a touch screen from its first touch and keeps the knowledge, so a row's sense
+    /// does not flip between frames while a finger is down or lifted.
+    #[test]
+    fn a_touch_screen_is_known_from_its_first_touch_on_and_stays_known() {
+        let ctx = egui::Context::default();
+        let mut seen = Vec::new();
+        frame(&ctx, true, egui::RawInput::default(), |ui| seen.push(touch_screen(ui.ctx())));
+        frame(&ctx, true, egui::RawInput { events: vec![a_finger_lands()], ..Default::default() }, |ui| seen.push(touch_screen(ui.ctx())));
+        frame(&ctx, true, egui::RawInput::default(), |ui| seen.push(touch_screen(ui.ctx())));
+        assert_eq!(seen, [false, true, true]);
+    }
+
+    /// On the phone a row takes a drag only where there is no touch screen: a finger's drag is the swipe
+    /// that scrolls the list, so the row takes clicks.
+    #[test]
+    fn a_row_takes_a_drag_only_where_there_is_no_touch_screen() {
+        let ctx = egui::Context::default();
+        let mut senses = Vec::new();
+        frame(&ctx, true, egui::RawInput::default(), |ui| senses.push(row_sense(ui.ctx()) == Sense::click_and_drag()));
+        frame(&ctx, true, egui::RawInput { events: vec![a_finger_lands()], ..Default::default() }, |ui| senses.push(row_sense(ui.ctx()) == Sense::click()));
+        frame(&ctx, true, egui::RawInput::default(), |ui| senses.push(row_sense(ui.ctx()) == Sense::click()));
+        assert_eq!(senses, [true, true, true]);
+    }
+
+    /// Off the phone layout (the desktop, the web, a tablet's desktop chrome) a touch screen keeps the
+    /// mouse's drags, even after a touch: the gestures are the phone's only.
+    #[test]
+    fn off_the_phone_layout_a_touch_screen_keeps_the_mouse_behaviour() {
+        let ctx = egui::Context::default();
+        let mut seen = Vec::new();
+        let mut state = |ui: &mut egui::Ui| seen.push((touch_screen(ui.ctx()), row_sense(ui.ctx()) == Sense::click_and_drag()));
+        frame(&ctx, false, egui::RawInput { events: vec![a_finger_lands()], ..Default::default() }, &mut state);
+        frame(&ctx, false, egui::RawInput::default(), &mut state);
+        assert_eq!(seen, [(false, true), (false, true)]);
+    }
+
+    /// The phone's menu sends the Type options to every type layer, and the other commands nothing.
+    #[test]
+    fn the_phone_menu_sends_the_type_options_to_every_type_layer_and_nothing_else() {
+        assert_eq!(menu_params("type.antiAlias.strong"), json!({"allTextLayers": true}));
+        assert_eq!(menu_params("type.orientation.vertical"), json!({"allTextLayers": true}));
+        assert_eq!(menu_params("type.openType.oldstyle"), json!({"allTextLayers": true}));
+        assert_eq!(menu_params("type.createWorkPath"), json!({}));
+        assert_eq!(menu_params("type.panels.characterStyles"), json!({}));
+        assert_eq!(menu_params("layer.flatten"), json!({}));
+    }
+
+    fn menu_item(id: &str, path: &[&str]) -> menus::MenuItem {
+        menus::MenuItem {
+            id: id.into(),
+            label: id.into(),
+            path: path.iter().map(|p| p.to_string()).collect(),
+            shortcut: None,
+            enabled: true,
+            checked: None,
+            color: None,
+        }
+    }
+
+    fn ids<'a>(items: &[&'a menus::MenuItem]) -> Vec<&'a str> {
+        items.iter().map(|i| i.id.as_str()).collect()
+    }
+
+    /// The menu sheet pages through the menus one at a time: the top menus, then a menu's own commands
+    /// and its submenus, each submenu on a page of its own.
+    #[test]
+    fn the_menu_sheet_pages_through_the_menus_and_their_submenus() {
+        let items = vec![
+            menu_item("file.open", &["File"]),
+            menu_item("file.export.png", &["File", "Export"]),
+            menu_item("file.export.jpg", &["File", "Export"]),
+            menu_item("type.antiAlias.sharp", &["Type", "Anti-Alias"]),
+            menu_item("type.createWorkPath", &["Type"]),
+            menu_item("view.zoomIn", &["View"]),
+        ];
+        let root = menu_page(&items, &Vec::<String>::new());
+        assert!(root.commands.is_empty());
+        assert_eq!(root.submenus, ["File", "Type", "View"]);
+        let file = menu_page(&items, &["File".to_string()]);
+        assert_eq!(ids(&file.commands), ["file.open"]);
+        assert_eq!(file.submenus, ["Export"]);
+        let export = menu_page(&items, &["File".to_string(), "Export".to_string()]);
+        assert_eq!(ids(&export.commands), ["file.export.png", "file.export.jpg"]);
+        assert!(export.submenus.is_empty());
+        let typ = menu_page(&items, &["Type".to_string()]);
+        assert_eq!(ids(&typ.commands), ["type.createWorkPath"]);
+        assert_eq!(typ.submenus, ["Anti-Alias"]);
+    }
+
+    /// On the phone a dialog takes the room the screen leaves it; elsewhere it keeps its own width.
+    #[test]
+    fn a_dialog_fits_the_phone_screen_and_keeps_its_width_elsewhere() {
+        let room = dialog_room(vec2(411.0, 891.0));
+        assert_eq!(room, 387.0);
+        assert_eq!(fit_width(780.0, Some(room)), 387.0);
+        assert_eq!(fit_width(380.0, Some(room)), 380.0);
+        assert_eq!(fit_width(800.0, None), 800.0);
+        assert_eq!(dialog_room(vec2(120.0, 300.0)), 200.0);
+    }
+}
