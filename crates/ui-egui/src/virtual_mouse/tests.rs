@@ -398,3 +398,55 @@ fn the_pointer_can_reach_the_top_bar() {
     let clamped = vm.process(Vec::new(), canvas(), 0.0, Modifiers::NONE, on_canvas);
     assert_eq!(pointer_at(&clamped.events), Some(pos2(200.0, 0.0)), "the canvas alone would keep it on the canvas");
 }
+
+#[test]
+fn a_finger_that_rests_and_lifts_clicks_nothing() {
+    let mut vm = on();
+    frame(&mut vm, vec![touch(1, TouchPhase::Start, pos2(150.0, 500.0))], 1.0);
+    let r = frame(&mut vm, vec![touch(1, TouchPhase::End, pos2(150.0, 500.0))], 1.0 + TAP_SECS + 0.2);
+    assert!(clicks(&r.events).is_empty(), "a resting finger is no tap: {:?}", clicks(&r.events));
+}
+
+#[test]
+fn a_tap_clicks_where_the_pointer_was_before_the_finger_wobbled() {
+    let mut vm = on();
+    let at = vm.pos.expect("the pointer is on");
+    frame(&mut vm, vec![touch(1, TouchPhase::Start, pos2(150.0, 500.0))], 1.0);
+    frame(&mut vm, vec![touch(1, TouchPhase::Move, pos2(155.0, 503.0))], 1.03);
+    let lift = frame(&mut vm, vec![touch(1, TouchPhase::End, pos2(155.0, 503.0))], 1.1);
+    let press_at = lift.events.iter().find_map(|e| match e {
+        Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
+        _ => None,
+    });
+    assert_eq!(press_at, Some(at), "the wobble does not nudge the click");
+    assert_eq!(vm.pos, Some(at));
+}
+
+#[test]
+fn a_stroke_ends_where_the_finger_put_the_pointer() {
+    let mut vm = on();
+    tap(&mut vm, 1, pos2(150.0, 500.0), 1.0);
+    frame(&mut vm, vec![touch(2, TouchPhase::Start, pos2(150.0, 500.0))], 1.2);
+    frame(&mut vm, vec![touch(2, TouchPhase::Move, pos2(150.0, 540.0))], 1.21);
+    frame(&mut vm, vec![touch(2, TouchPhase::Move, pos2(150.0, 600.0))], 1.22);
+    let target = vm.target;
+    let lift = frame(&mut vm, vec![touch(2, TouchPhase::End, pos2(150.0, 600.0))], 1.23);
+    let release_at = lift.events.iter().find_map(|e| match e {
+        Event::PointerButton { pos, pressed: false, .. } => Some(*pos),
+        _ => None,
+    });
+    assert_eq!(release_at, target, "the stroke is not cut short by the easing");
+}
+
+#[test]
+fn the_gain_rises_smoothly_from_fine_to_fast() {
+    assert!((gain(0.0) - GAIN_MIN).abs() < 1e-6);
+    assert!((gain(ACCEL_FROM) - 1.0).abs() < 1e-6);
+    assert!((gain(ACCEL_TO) - GAIN_MAX).abs() < 1e-6);
+    let mut last = gain(0.0);
+    for i in 1..=2000 {
+        let g = gain(i as f32);
+        assert!(g >= last - 1e-6 && g - last < 0.05, "no step in the gain at {i}: {last} -> {g}");
+        last = g;
+    }
+}
