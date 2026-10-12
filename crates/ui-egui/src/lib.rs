@@ -1291,9 +1291,10 @@ impl eframe::App for PhotocraftApp {
         virtual_input::logic(self, ctx);
         // The phone's diagnostic log is written to Downloads as it grows (see `menus::tick_diagnostic_log`).
         menus::tick_diagnostic_log(self, ctx);
-        // The pointer eases to where the finger put it, and no input comes meanwhile (`virtual_mouse.rs`).
+        // The pointer eases to where the finger put it, and no input comes meanwhile (`virtual_mouse.rs`). The next frame
+        // comes at the screen's own rate (90 or 120 Hz on many phones), so the glide is as smooth as the screen allows.
         if self.virtual_mouse.wants_frames() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            ctx.request_repaint();
         }
         monitor_status::poll(self, ctx);
         // Control requests and persisted preferences can change the language in this frame.

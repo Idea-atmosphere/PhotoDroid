@@ -4,7 +4,9 @@
 //! - A finger that slides moves the pointer by the distance it slides, not to where the finger is, so a finger that
 //!   is placed again does not jump the pointer. The pointer eases to where the finger puts it, so it glides and does
 //!   not step. A slide presses nothing, however slowly it goes.
-//! - A tap (a finger that lifts without moving more than [`TAP_SLOP`]) clicks where the pointer is.
+//! - A tap (a finger that lifts within [`TAP_SECS`] without moving more than [`TAP_SLOP`]) clicks where the pointer
+//!   was when the finger touched down, so the finger's small wobble during the tap does not nudge the click. A finger
+//!   that rests and then lifts clicks nothing.
 //! - Two taps in a row ([`DOUBLE_TAP_SECS`] apart) are a double click. A second touch that moves after a tap is a
 //!   drag, and it starts the drag lock: the button stays held across lifts, so a finger that lifts and moves again
 //!   goes on dragging (a stroke goes on), until another double tap ends the lock. While the lock is on, a single tap
@@ -29,13 +31,22 @@ use crate::theme::Tokens;
 
 /// A finger that moves no further than this (points) from where it touched down is still: a tap.
 pub const TAP_SLOP: f32 = 8.0;
+/// A touch held longer than this (seconds) is no tap, however still it was: a finger that rests and lifts clicks nothing.
+pub const TAP_SECS: f64 = 0.3;
 /// A touch that starts within this many seconds of a tap's release is the second touch of a double tap.
 pub const DOUBLE_TAP_SECS: f64 = 0.35;
-/// The pointer's gain (points of pointer per point of finger): 1 for a slow finger, [`GAIN_MAX`] for a fast one.
+/// The pointer's gain (points of pointer per point of finger): [`GAIN_MIN`] for a very slow finger (fine positioning),
+/// 1 for a slow one, [`GAIN_MAX`] for a fast one.
+const GAIN_MIN: f32 = 0.7;
 const GAIN_MAX: f32 = 1.8;
-/// The finger's speed (points a second) where the gain starts to rise, and where it is at [`GAIN_MAX`].
+/// The finger's speed (points a second) below which the gain is [`GAIN_MIN`], where it is back at 1 and starts to rise,
+/// and where it is at [`GAIN_MAX`].
+const PRECISE_BELOW: f32 = 40.0;
 const ACCEL_FROM: f32 = 220.0;
 const ACCEL_TO: f32 = 1400.0;
+/// The finger's speed is smoothed with this time constant (seconds), so that the gain does not jump with one frame's
+/// uneven touch samples.
+const SPEED_SECS: f32 = 0.05;
 /// The pointer eases to where the finger puts it, with this time constant (seconds).
 const EASE_SECS: f64 = 0.04;
 /// The pointer is at its target within this many points.
@@ -67,6 +78,10 @@ struct Gesture {
     travel: f32,
     /// The first finger is the second touch of a double tap.
     armed: bool,
+    /// When the first finger touched down.
+    started: f64,
+    /// Where the fingers had put the pointer when the first finger touched down: a tap clicks there.
+    anchor: Option<Pos2>,
 }
 
 /// What a frame's events became (see [`VirtualMouse::process`]).
@@ -117,6 +132,8 @@ pub struct VirtualMouse {
     last_tap: Option<f64>,
     /// When the last frame was processed, for the finger's speed and the easing.
     last_frame: Option<f64>,
+    /// The first finger's speed (points a second), smoothed over a few frames (see [`SPEED_SECS`]).
+    speed: f32,
     /// Events queued for the next frame (a button let go when the mouse went off or the screen was covered).
     queued: Vec<Event>,
     /// Whether egui's primary press started on the canvas (`Some(true)`) or on the screen (`Some(false)`); `None` while
@@ -307,7 +324,8 @@ impl VirtualMouse {
             }
             let armed = self.last_tap.is_some_and(|t| step.now - t <= DOUBLE_TAP_SECS);
             self.last_tap = None;
-            self.gesture = Some(Gesture { fingers: 1, travel: 0.0, armed });
+            self.gesture = Some(Gesture { fingers: 1, travel: 0.0, armed, started: step.now, anchor: self.target });
+            self.speed = 0.0;
             self.pad = Some(Finger { id, start: pos, last: pos, travel: 0.0 });
             // The second touch of a double tap presses at once, so a drag from here has no gap. While the lock is on,
             // a tap presses nothing: it only counts toward ending the lock.
@@ -379,7 +397,11 @@ impl VirtualMouse {
         {
             self.travelled(f.start.distance(pos));
             self.pad = None;
-            // A lift lets the button go, so the stroke ends here. The lock stays on.
+            // A lift lets the button go, so the stroke ends here. The lock stays on. The stroke ends where the finger
+            // put the pointer, not short of it where the easing has got to.
+            if self.down {
+                self.snap(injected);
+            }
             self.release(step, injected);
         } else if let Some(f) = self.second
             && f.id == id
@@ -405,7 +427,7 @@ impl VirtualMouse {
     /// it may end the lock (the second tap of a double tap). Two fingers that tapped together make a right click.
     fn finish(&mut self, step: Step, ended: bool, injected: &mut Vec<Event>) {
         let Some(g) = self.gesture.take() else { return };
-        let tap = ended && g.travel <= TAP_SLOP;
+        let tap = ended && g.travel <= TAP_SLOP && step.now - g.started <= TAP_SECS;
         self.last_tap = None;
         if !tap {
             return;
@@ -422,12 +444,16 @@ impl VirtualMouse {
                 if self.locked {
                     // A tap while the lock is on clicks nothing; it may be the first tap of the double tap that ends it.
                     self.last_tap = Some(step.now);
-                } else if let Some(p) = self.pos {
-                    click(p, PointerButton::Primary, step.mods, injected);
-                    self.last_tap = Some(step.now);
+                } else {
+                    self.return_to(g.anchor);
+                    if let Some(p) = self.pos {
+                        click(p, PointerButton::Primary, step.mods, injected);
+                        self.last_tap = Some(step.now);
+                    }
                 }
             }
             2 => {
+                self.return_to(g.anchor);
                 if let Some(p) = self.pos {
                     click(p, PointerButton::Secondary, step.mods, injected);
                 }
@@ -441,10 +467,15 @@ impl VirtualMouse {
     fn advance(&mut self, step: Step, moved: Vec2, injected: &mut Vec<Event>) {
         let dt = self.last_frame.map_or(1.0 / 60.0, |t| (step.now - t).max(0.0) as f32).clamp(1.0 / 240.0, 0.1);
         self.last_frame = Some(step.now);
+        // The finger's speed, smoothed, so that one uneven frame does not make the pointer leap.
+        if self.pad.is_some() {
+            let k = 1.0 - (-dt / SPEED_SECS).exp();
+            self.speed += (moved.length() / dt - self.speed) * k;
+        }
         if moved != Vec2::ZERO
             && let Some(t) = self.target
         {
-            let next = t + moved * gain(moved.length() / dt);
+            let next = t + moved * gain(self.speed);
             self.target = Some(within(next, step.canvas));
         }
         let (Some(p), Some(t)) = (self.pos, self.target) else { return };
@@ -453,6 +484,24 @@ impl VirtualMouse {
         if at != p {
             self.pos = Some(at);
             injected.push(Event::PointerMoved(at));
+        }
+    }
+
+    /// The pointer goes at once to its target (no easing), as a stroke's end must be where the finger put it.
+    fn snap(&mut self, injected: &mut Vec<Event>) {
+        if let (Some(p), Some(t)) = (self.pos, self.target)
+            && p != t
+        {
+            self.pos = Some(t);
+            injected.push(Event::PointerMoved(t));
+        }
+    }
+
+    /// A tap's click goes where the pointer was when the finger touched down (`anchor`), undoing the finger's wobble.
+    fn return_to(&mut self, anchor: Option<Pos2>) {
+        if let Some(a) = anchor {
+            self.pos = Some(a);
+            self.target = Some(a);
         }
     }
 
@@ -547,10 +596,17 @@ fn draw_loupe(ctx: &egui::Context, p: Pos2, view: CanvasView) {
     painter.circle_stroke(loupe.center(), 5.0, Stroke::new(2.0, Color32::from_black_alpha(200)));
 }
 
-/// The pointer's gain at a finger speed (points a second): a mild acceleration, so a fast slide travels further.
+/// The pointer's gain at a finger speed (points a second): below 1 for a very slow finger, so the pointer can be put
+/// on a pixel, and a mild acceleration for a fast one, so a fast slide travels further. Both ends ease in and out
+/// (smoothstep), so the gain has no corner to feel.
 fn gain(speed: f32) -> f32 {
-    let t = ((speed - ACCEL_FROM) / (ACCEL_TO - ACCEL_FROM)).clamp(0.0, 1.0);
-    1.0 + (GAIN_MAX - 1.0) * t
+    let smooth = |x: f32| {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
+    let fine = smooth(speed / PRECISE_BELOW.max(1.0));
+    let fast = smooth((speed - ACCEL_FROM) / (ACCEL_TO - ACCEL_FROM));
+    GAIN_MIN + (1.0 - GAIN_MIN) * fine + (GAIN_MAX - 1.0) * fast
 }
 
 /// `p`, kept inside `r`. (Not `clamp`, which panics on an empty rectangle.)
