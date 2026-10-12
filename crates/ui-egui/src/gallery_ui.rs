@@ -346,6 +346,35 @@ fn update_thumbs(d: &mut GalleryDialog, ctx: &egui::Context, budget: usize) {
 }
 
 /// Draws the dialog (a full-window layer over the app).
+/// Splits the dialog body into preview, zoom bar, category column and settings column. A
+/// wide window keeps Photoshop's arrangement; a narrow one (a phone) shrinks the two columns,
+/// and a tall, narrow one puts the preview on top with the columns side by side underneath.
+fn layout(body: ERect) -> (ERect, ERect, ERect, ERect) {
+    let wide = MID_W + RIGHT_W + 300.0;
+    if body.width() < wide && body.width() < body.height() {
+        let preview_h = (body.height() * 0.4).clamp(140.0, 460.0);
+        let area = ERect::from_min_size(body.min, vec2(body.width(), preview_h - 30.0));
+        let zoom_bar = ERect::from_min_size(area.left_bottom(), vec2(body.width(), 30.0));
+        let lower = ERect::from_min_max(zoom_bar.left_bottom(), body.max);
+        let mid_w = (lower.width() * (MID_W / (MID_W + RIGHT_W))).round();
+        let mid = ERect::from_min_size(lower.min, vec2(mid_w, lower.height()));
+        let right = ERect::from_min_max(pos2(mid.right(), lower.top()), lower.max);
+        return (area, zoom_bar, mid, right);
+    }
+    let scale = (body.width() * 0.62 / (MID_W + RIGHT_W)).min(1.0);
+    let (mid_w, right_w) = ((MID_W * scale).round(), (RIGHT_W * scale).round());
+    let right = ERect::from_min_size(pos2(body.right() - right_w, body.top()), vec2(right_w, body.height()));
+    let mid = ERect::from_min_size(pos2(right.left() - mid_w, body.top()), vec2(mid_w, body.height()));
+    let area = ERect::from_min_max(body.min, pos2(mid.left(), body.bottom() - 30.0));
+    let zoom_bar = ERect::from_min_max(pos2(body.left(), area.bottom()), pos2(mid.left(), body.bottom()));
+    (area, zoom_bar, mid, right)
+}
+
+/// How many thumbnails fit side by side in a category (three on a desktop).
+fn thumb_columns(width: f32) -> usize {
+    (((width + 6.0) / (THUMB[0] as f32 + 6.0)).floor() as usize).clamp(1, 3)
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
@@ -362,10 +391,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let name = d.effects.get(d.selected).map_or("", |e| tl!(e.filter.name()));
         painter.text(title.center(), Align2::CENTER_CENTER, format!("{name} ({}, {pct})", d.layer_name), FontId::proportional(13.0), t.text);
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
-        let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
-        let mid = ERect::from_min_size(pos2(right.left() - MID_W, body.top()), vec2(MID_W, body.height()));
-        let area = ERect::from_min_max(body.min, pos2(mid.left(), body.bottom() - 30.0));
-        let zoom_bar = ERect::from_min_max(pos2(body.left(), area.bottom()), pos2(mid.left(), body.bottom()));
+        let (area, zoom_bar, mid, right) = layout(body);
 
         // ---- Preview ----
         painter.rect_filled(area, 0.0, t.canvas);
@@ -402,7 +428,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // ---- Category folders with thumbnails ----
         painter.rect_filled(mid, 0.0, t.dock);
         painter.line_segment([mid.left_top(), mid.left_bottom()], Stroke::new(1.0, t.separator));
+        painter.line_segment([mid.left_top(), mid.right_top()], Stroke::new(1.0, t.separator));
         update_thumbs(d, ctx, 6);
+        let columns = thumb_columns(mid.width() - 16.0);
         let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(mid.shrink2(vec2(8.0, 8.0))));
         egui::ScrollArea::vertical().id_salt("gallery-tree").show(&mut mu, |ui| {
             for (ci, cat) in GALLERY_CATEGORIES.iter().enumerate() {
@@ -443,7 +471,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         if cell.inner.clicked() {
                             d.set_filter(*f);
                         }
-                        if n % 3 == 2 {
+                        if n % columns == columns - 1 {
                             ui.end_row();
                         }
                     }
@@ -458,12 +486,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let inner = right.shrink2(vec2(12.0, 10.0));
         let mut ru = ui.new_child(egui::UiBuilder::new().max_rect(inner));
         ru.spacing_mut().item_spacing.y = 6.0;
+        let button_w = ((inner.width() - 12.0) / 2.0).clamp(60.0, 120.0);
         ru.horizontal(|ui| {
             if let Some(role) = widgets::dialog_buttons(
                 ui,
                 &[
-                    widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("OK"), 120.0),
-                    widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 120.0),
+                    widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("OK"), button_w),
+                    widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), button_w),
                 ],
             ) {
                 action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
@@ -476,7 +505,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             d.set_filter(cur);
         }
         widgets::hairline(&mut ru);
-        let list_h = 190.0;
+        let list_h = (inner.height() * 0.4).clamp(110.0, 190.0);
         let params_h = (inner.height() - 110.0 - list_h).max(80.0);
         egui::ScrollArea::vertical().id_salt("gallery-params").max_height(params_h).show(&mut ru, |ui| {
             let sel = d.selected;
@@ -644,6 +673,23 @@ mod tests {
         assert_eq!(app.distort.gallery.as_ref().unwrap().effects.len(), 2);
         control(&mut app, &json!({"cancel": true})).unwrap();
         assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "cancel records nothing");
+    }
+
+    #[test]
+    fn a_phone_sized_gallery_stacks_the_preview_and_fits_the_columns() {
+        let desk = ERect::from_min_size(pos2(0.0, 30.0), vec2(1400.0, 870.0));
+        let (area, _, mid, right) = layout(desk);
+        assert_eq!((mid.width(), right.width()), (MID_W, RIGHT_W));
+        assert!(area.right() <= mid.left());
+        let phone = ERect::from_min_size(pos2(0.0, 30.0), vec2(390.0, 790.0));
+        let (area, zoom, mid, right) = layout(phone);
+        assert!(area.width() >= 390.0 - 0.5 && zoom.bottom() <= mid.top() + 0.5);
+        assert!(mid.right() <= right.left() + 0.5 && right.right() <= 390.0 + 0.5);
+        assert!(thumb_columns(mid.width() - 16.0) >= 1);
+        let sideways = ERect::from_min_size(pos2(0.0, 30.0), vec2(844.0, 360.0));
+        let (area, _, mid, right) = layout(sideways);
+        assert!(area.width() > 250.0 && mid.width() < MID_W && right.right() <= 844.5);
+        assert_eq!(thumb_columns(252.0), 3);
     }
 
     #[test]

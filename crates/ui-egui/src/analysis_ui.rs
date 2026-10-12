@@ -534,19 +534,28 @@ pub(crate) fn title_row(ui: &mut egui::Ui, title: &str) -> bool {
 pub(crate) fn panel_window(app: &PhotocraftApp, ctx: &egui::Context, id: &str, title: &str, offset: egui::Vec2, width: f32, body: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
+    // On the phone a panel wider than the screen keeps its layout and scrolls sideways in a window that fits.
+    let fit = crate::mobile::window_width(ctx, width);
     egui::Window::new(title)
         .id(egui::Id::new(id))
         .title_bar(false)
         .resizable(false)
         .movable(!app.session.prefs().workspace_locked)
-        .min_width(width)
-        .max_width(width)
+        .min_width(fit)
+        .max_width(fit)
         .frame(float_frame(&t))
-        .default_pos(pos2((canvas.right() - width - 16.0 + offset.x).max(canvas.left() + 8.0), canvas.top() + offset.y))
+        .default_pos(pos2((canvas.right() - fit - 16.0 + offset.x).max(canvas.left() + 8.0), canvas.top() + offset.y))
         .show(ctx, |ui| {
-            ui.set_width(width);
-            ui.set_max_width(width);
-            body(ui);
+            ui.set_width(fit);
+            ui.set_max_width(fit);
+            if fit < width {
+                egui::ScrollArea::horizontal().id_salt((id, "narrow")).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.set_width(width);
+                    body(ui);
+                });
+            } else {
+                body(ui);
+            }
         });
 }
 

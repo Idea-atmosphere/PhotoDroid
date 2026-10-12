@@ -255,7 +255,7 @@ fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<
                 ui.horizontal(|ui| {
                     let selected = get_s(f, "__savedPreset", "") == preset.name;
                     let label = egui::Button::new(&preset.name).selected(selected).truncate();
-                    if ui.add_sized(vec2(422.0, 32.0), label).on_hover_text(&preset.name).clicked() {
+                    if ui.add_sized(vec2((ui.available_width() - 84.0).clamp(80.0, 422.0), 32.0), label).on_hover_text(&preset.name).clicked() {
                         apply_saved_preset(f, preset);
                     }
                     if widgets::secondary_button(ui, tl!("Delete"), 76.0).clicked() {
@@ -329,9 +329,9 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
 pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let cat = get_s(f, "__category", "Recent");
-    // Category tabs.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 18.0;
+    // Category tabs. They wrap onto a second row where the dialog is narrow (a phone).
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(18.0, 10.0);
         for name in CATEGORIES.iter().map(|c| c.0).chain(["Saved"]) {
             let on = cat == name;
             let label = if name == "Saved" { tl!("Saved") } else { tl!(name) };
@@ -351,18 +351,25 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     // The clipboard image's size comes first among the Recent presets.
     let presets: Vec<Preset> = clipboard_preset(f).filter(|_| cat == CATEGORIES[0].0).into_iter().chain(presets.iter().copied()).collect();
     let chosen = get_s(f, "__preset", "");
-    ui.horizontal_top(|ui| {
+    // The presets and the details side by side, or the details under the presets where the dialog
+    // is too narrow for both (a phone), with as many columns of cards as fit.
+    let room = ui.available_width();
+    let stacked = crate::mobile::gestures_on(ui.ctx()) && stack_details(room);
+    let grid_w = if stacked { room } else { GRID_W };
+    let columns = card_columns(grid_w);
+    let layout = if stacked { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
         // Left: preset grid.
         ui.vertical(|ui| {
-            ui.set_width(520.0);
+            ui.set_width(grid_w);
             if cat == "Saved" {
                 saved_presets(app, ui, f);
                 return;
             }
             ui.label(RichText::new(crate::i18n::fmt(tl!("BLANK DOCUMENT PRESETS ({n})"), &[("n", &presets.len().to_string())])).size(11.0).color(t.text_faint));
             ui.add_space(6.0);
-            let card = vec2(164.0, 112.0);
-            for row in presets.chunks(3) {
+            let card = vec2(card_width(grid_w, columns), 112.0);
+            for row in presets.chunks(columns) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     for p in row {
@@ -410,7 +417,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
         ui.add_space(10.0);
         // Right: Preset Details.
         ui.vertical(|ui| {
-            ui.set_width(260.0);
+            ui.set_width(DETAILS_W.min(ui.available_width()));
             ui.label(RichText::new(tl!("PRESET DETAILS")).size(11.0).color(t.text_faint));
             ui.add_space(4.0);
             let mut name = get_s(f, "name", tl!("Untitled-1"));
@@ -509,9 +516,45 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     });
 }
 
+/// The preset grid's width beside the details, and the details' width.
+const GRID_W: f32 = 520.0;
+const DETAILS_W: f32 = 260.0;
+/// A preset card's widest, and the gap between cards.
+const CARD_W: f32 = 164.0;
+const CARD_GAP: f32 = 8.0;
+
+/// Do the details go under the presets? They do where the body is narrower than both side by side.
+fn stack_details(room: f32) -> bool {
+    room < GRID_W + 10.0 + DETAILS_W
+}
+
+/// How many columns of preset cards a grid this wide holds: three at most, one at least.
+fn card_columns(grid_w: f32) -> usize {
+    (((grid_w + CARD_GAP) / (CARD_W + CARD_GAP)).floor() as usize).clamp(1, 3)
+}
+
+/// A card's width in a grid of `columns` this wide: [`CARD_W`], or less where the grid is narrower.
+fn card_width(grid_w: f32, columns: usize) -> f32 {
+    let n = columns.max(1) as f32;
+    ((grid_w - CARD_GAP * (n - 1.0)) / n).clamp(80.0, CARD_W)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// On a phone the details go under the presets, and the cards fit the dialog's width.
+    #[test]
+    fn a_narrow_dialog_stacks_the_details_and_fits_the_cards() {
+        assert!(!stack_details(800.0));
+        assert!(stack_details(387.0));
+        assert_eq!(card_columns(GRID_W), 3);
+        assert_eq!(card_width(GRID_W, 3), CARD_W);
+        assert_eq!(card_columns(363.0), 2);
+        assert!(card_width(363.0, 2) * 2.0 + CARD_GAP <= 363.0);
+        assert_eq!(card_columns(150.0), 1);
+        assert!(card_width(150.0, 1) <= 150.0);
+    }
 
     #[test]
     fn units_round_trip_through_pixels() {

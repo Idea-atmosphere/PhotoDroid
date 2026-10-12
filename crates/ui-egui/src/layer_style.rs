@@ -697,20 +697,36 @@ fn fx_checkbox(p: &egui::Painter, cb: egui::Rect, on: bool, t: &Tokens) {
     }
 }
 
+/// The effect list's width beside the parameters, and the parameters' width.
+const LIST_W: f32 = 190.0;
+const PAGE_W: f32 = 330.0;
+
+/// Does the effect list go above the parameters? It does where the body is narrower than both side
+/// by side, with the rule between them.
+fn stack_pages(room: f32) -> bool {
+    room < LIST_W + 9.0 + PAGE_W + 16.0
+}
+
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let selected = f.get("selected").and_then(Value::as_str).unwrap_or("dropShadow").to_string();
     let mut style_click: Option<String> = None;
     let mut new_style = false;
     let invalid = validate_params(f).err();
-    ui.horizontal_top(|ui| {
+    // The effect list beside the parameters, or above them where the dialog is too narrow for both
+    // (the phone layout): there the list takes the dialog's width.
+    let room = ui.available_width();
+    let stacked = crate::mobile::gestures_on(ui.ctx()) && stack_pages(room);
+    let list_w = if stacked { room } else { LIST_W };
+    let layout = if stacked { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
         // Left: effect list.
         ui.vertical(|ui| {
-            ui.set_width(190.0);
+            ui.set_width(list_w);
             // Styles & Blending Options rows (matching the effect row layout & padding).
             for (id, label) in [(STYLES_PAGE, "Styles"), (BLENDING, "Blending Options")] {
                 let is_sel = selected == id;
-                let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(vec2(list_w, 26.0), Sense::click());
                 if is_sel {
                     ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
                 } else if resp.hovered() {
@@ -737,7 +753,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 if ids.is_empty() {
                     // The effect isn't on the layer: a greyed row with an empty checkbox, as in
                     // Photoshop (#1357); a click on either adds it, turned on.
-                    let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(vec2(list_w, 26.0), Sense::click());
                     if resp.hovered() {
                         ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
                     }
@@ -760,7 +776,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     let kind_label = KINDS.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or(label);
                     let mut on = e.get("on").and_then(Value::as_bool).unwrap_or(false);
                     let is_sel = id == &selected;
-                    let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(vec2(list_w, 26.0), Sense::click());
                     if is_sel {
                         ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
                     } else if resp.hovered() {
@@ -805,10 +821,16 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 }
             }
         });
-        widgets::vline(ui, 330.0);
+        if stacked {
+            ui.add_space(6.0);
+            widgets::hairline(ui);
+            ui.add_space(6.0);
+        } else {
+            widgets::vline(ui, PAGE_W);
+        }
         // Right: parameters of the selected page.
         ui.vertical(|ui| {
-            ui.set_width(330.0);
+            ui.set_width(PAGE_W.min(room));
             if selected == STYLES_PAGE {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!("Styles")).font(crate::theme::semibold(14.0)).color(t.text));

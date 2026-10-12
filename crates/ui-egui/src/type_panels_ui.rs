@@ -151,7 +151,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             .frame(float_frame(&t))
             .default_pos(pos2((canvas.right() - 314.0).max(canvas.left() + 8.0), canvas.top() + 40.0))
             .show(ctx, |ui| {
-                ui.set_width(290.0);
+                ui.set_width(crate::mobile::window_width(ui.ctx(), 290.0));
                 ui.horizontal(|ui| {
                     let mut tab = app.ui.type_panels.styles_tab;
                     for (i, name) in [tl!("Character Styles"), tl!("Paragraph Styles")].iter().enumerate() {
@@ -186,7 +186,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             .frame(float_frame(&t))
             .default_pos(pos2((canvas.right() - 314.0 - 372.0).max(canvas.left() + 8.0), canvas.top() + 40.0))
             .show(ctx, |ui| {
-                ui.set_width(340.0);
+                ui.set_width(crate::mobile::window_width(ui.ctx(), 340.0));
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!("Glyphs")).color(t.text).size(12.0).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -745,7 +745,7 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .title_bar(false)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0))
         .show(ctx, |ui| {
-            ui.set_width(380.0);
+            ui.set_width(crate::mobile::window_width(ui.ctx(), 380.0));
             ui.label(RichText::new(tl!("Check Spelling")).color(t.text).size(13.0).strong());
             ui.add_space(6.0);
             ui.horizontal_top(|ui| {

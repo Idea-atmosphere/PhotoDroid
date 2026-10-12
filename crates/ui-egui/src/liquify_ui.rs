@@ -580,6 +580,18 @@ fn load_backdrop(app: &PhotocraftApp, ctx: &egui::Context, layer: LayerId, canva
     Some(ctx.load_texture("liquify-backdrop", crate::distort_ui::surface_image(&s, canvas, PROXY_SIDE), egui::TextureOptions::LINEAR))
 }
 
+/// Does a dialog body this wide put the properties under the preview? Below this width the preview
+/// between the tool strip and the properties panel would be too narrow to work in.
+fn stack_panels(width: f32) -> bool {
+    width < LEFT_W + RIGHT_W * 2.0
+}
+
+/// The preview's height when the properties are under it: a little under half the body, and room
+/// for at least a few rows of properties and the buttons.
+fn stacked_preview_height(body: f32) -> f32 {
+    (body * 0.45).max(160.0).min((body - 220.0).max(body * 0.35))
+}
+
 /// Draws the dialog (a full-window layer over the app).
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
@@ -612,6 +624,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             t.text,
         );
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
+        // A narrow window (a phone held upright) has no room for the preview between the tool strip and
+        // the properties, so the properties go under the preview, at the width the strip leaves.
+        let stacked = stack_panels(body.width());
+        let split = body.top() + stacked_preview_height(body.height());
         // Left tool strip.
         let left = ERect::from_min_size(body.min, vec2(LEFT_W, body.height()));
         painter.rect_filled(left, 0.0, t.dock);
@@ -632,10 +648,20 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         }
         // Right properties panel.
-        let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
+        let right = if stacked {
+            ERect::from_min_max(pos2(left.right(), split), body.max)
+        } else {
+            ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()))
+        };
         painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 12.0))));
+        if stacked {
+            painter.line_segment([right.left_top(), right.right_top()], Stroke::new(1.0, t.separator));
+        } else {
+            painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
+        }
+        // The properties scroll above the footer buttons, so the last rows never hide under them.
+        let props_rect = ERect::from_min_max(right.min + vec2(14.0, 12.0), (right.max - vec2(14.0, 56.0)).max(right.min + vec2(15.0, 13.0)));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(props_rect));
         egui::ScrollArea::vertical().id_salt("liquify-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             widgets::section_label(ui, tl!("Brush Tool Options"));
@@ -688,7 +714,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             );
         });
         // Footer buttons.
-        let foot = ERect::from_min_size(pos2(right.left() + 14.0, right.bottom() - 48.0), vec2(RIGHT_W - 28.0, 32.0));
+        let foot = ERect::from_min_size(pos2(right.left() + 14.0, right.bottom() - 48.0), vec2((right.width() - 28.0).max(1.0), 32.0));
         let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
         if let Some(role) = widgets::dialog_buttons(
             &mut fb,
@@ -700,7 +726,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
         }
         // Preview.
-        let area = ERect::from_min_max(pos2(left.right(), body.top()), pos2(right.left(), body.bottom()));
+        let area = if stacked {
+            ERect::from_min_max(pos2(left.right(), body.top()), pos2(body.right(), split))
+        } else {
+            ERect::from_min_max(pos2(left.right(), body.top()), pos2(right.left(), body.bottom()))
+        };
         painter.rect_filled(area, 0.0, t.canvas);
         let (cw, ch) = (d.canvas.width() as f32, d.canvas.height() as f32);
         if d.zoom <= 0.0 {

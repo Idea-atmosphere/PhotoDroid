@@ -632,6 +632,8 @@ fn float_window(
         .inner_margin(egui::Margin::same(8));
     let canvas = canvas_drop_rect(app);
     let mut close = false;
+    // On the phone the panel is no wider than the screen.
+    let width = crate::mobile::window_width(ctx, width);
     egui::Window::new(title)
         .id(egui::Id::new(("preset-window", key)))
         .title_bar(false)
