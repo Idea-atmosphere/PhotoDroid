@@ -351,15 +351,72 @@ fn a_cancelled_touch_clicks_nothing() {
 }
 
 #[test]
-fn the_magnifier_brings_the_pointer_on_and_the_pointer_off_takes_the_magnifier_with_it() {
+fn the_magnifier_works_without_the_pointer_and_outlasts_it() {
     let mut vm = VirtualMouse::default();
     vm.toggle_magnifier(canvas());
-    assert!(vm.is_on() && vm.magnifier_on(), "the loupe brings the pointer on");
-    vm.toggle_magnifier(canvas());
-    assert!(vm.is_on() && !vm.magnifier_on(), "the pointer stays when the loupe goes");
-    vm.toggle_magnifier(canvas());
+    assert!(!vm.is_on() && vm.magnifier_on(), "the loupe follows the finger with the pointer off");
     vm.toggle(canvas());
-    assert!(!vm.is_on() && !vm.magnifier_on(), "turning the pointer off ends the loupe");
+    vm.toggle(canvas());
+    assert!(!vm.is_on() && vm.magnifier_on(), "turning the pointer off leaves the loupe on");
+    vm.toggle_magnifier(canvas());
+    assert!(!vm.magnifier_on());
+}
+
+#[test]
+fn the_loupe_keeps_out_of_the_way_of_the_work() {
+    let screen = Rect::from_min_max(pos2(0.0, 0.0), pos2(400.0, 800.0));
+    let far = loupe_rect(screen, 48.0, pos2(300.0, 600.0));
+    assert_eq!(far.min, pos2(8.0, 56.0), "the top-left corner, under the top bar");
+    let under = loupe_rect(screen, 48.0, pos2(60.0, 100.0));
+    assert!(under.left() > 200.0 && !under.expand(LOUPE_CLEAR).contains(pos2(60.0, 100.0)), "it moves to the other corner: {under:?}");
+}
+
+#[test]
+fn the_floating_right_click_clicks_where_the_pointer_is() {
+    let mut vm = on();
+    let at = vm.pos.expect("the pointer is on");
+    vm.right_click();
+    let r = frame(&mut vm, vec![], 1.0);
+    assert_eq!(clicks(&r.events), vec![(PointerButton::Secondary, true), (PointerButton::Secondary, false)]);
+    let press_at = r.events.iter().find_map(|e| match e {
+        Event::PointerButton { pos, .. } => Some(*pos),
+        _ => None,
+    });
+    assert_eq!(press_at, Some(at));
+}
+
+#[test]
+fn the_precise_mode_slows_the_pointer() {
+    let slide = |precise: bool| {
+        let mut vm = on();
+        if precise {
+            vm.toggle_precise();
+        }
+        let start = vm.target.expect("on").x;
+        let mut now = 1.0;
+        frame(&mut vm, vec![touch(1, TouchPhase::Start, pos2(100.0, 600.0))], now);
+        for i in 1..=20 {
+            now += 1.0 / 60.0;
+            frame(&mut vm, vec![touch(1, TouchPhase::Move, pos2(100.0 + 3.0 * i as f32, 600.0))], now);
+        }
+        vm.target.expect("on").x - start
+    };
+    let (normal, precise) = (slide(false), slide(true));
+    assert!(precise < normal * 0.5 && precise > 0.0, "{precise} vs {normal}");
+}
+
+#[test]
+fn a_held_drag_at_the_edge_pans_the_picture_and_nowhere_else() {
+    let mut vm = on();
+    locked_drag(&mut vm);
+    frame(&mut vm, vec![touch(7, TouchPhase::Start, pos2(120.0, 500.0))], 2.0);
+    frame(&mut vm, vec![touch(7, TouchPhase::Move, pos2(120.0, 530.0))], 2.02);
+    assert!(vm.held());
+    assert_eq!(vm.edge_push(canvas()), Vec2::ZERO, "in the middle nothing pans");
+    vm.pos = Some(pos2(398.0, 400.0));
+    let push = vm.edge_push(canvas());
+    assert!(push.x > 0.0 && push.y == 0.0, "at the right edge the picture pans right: {push:?}");
+    assert!(vm.wants_frames(), "and keeps the frames coming");
 }
 
 /// A frame that draws the canvas some other way (a rotated view) forgets the picture the frame before, so the loupe never

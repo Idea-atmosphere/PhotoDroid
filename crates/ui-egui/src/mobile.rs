@@ -122,6 +122,11 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if side {
         sheet(app, ui);
     }
+    // The floating bars over the canvas: the open lasso outline's, and the virtual mouse's own buttons.
+    if !covered {
+        crate::lasso_ui::phone_bar(app, ui.ctx());
+        mouse_bar(app, ui.ctx());
+    }
     menu(app, ui.ctx());
     app.virtual_mouse.overlay(ui.ctx());
 }
@@ -189,8 +194,8 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 toggle_menu = icons::button(ui, "align-justify", TOUCH, menu_open, tl!("Menu")).clicked();
                 // The name, and the status line under it, take the room the buttons leave.
-                // The magnifier's toggle shows only while the pointer is on: the title keeps the room it can.
-                let buttons = if mouse_on { 6.0 } else { 5.0 };
+                // Undo, redo, the mouse, the magnifier, the keyboard and the panels.
+                let buttons = 6.0;
                 let name_w = (ui.available_width() - buttons * (TOUCH + 2.0)).max(0.0);
                 ui.vertical(|ui| {
                     ui.set_width(name_w);
@@ -210,9 +215,8 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                 });
                 toggle_mouse = toggle_button(ui, "mouse-pointer-2", mouse_on, tl!("Virtual mouse"));
-                if mouse_on {
-                    toggle_lens = toggle_button(ui, "search", lens_on, tl!("Magnifier"));
-                }
+                // The magnifier works with a finger too: a loupe in a corner shows what is under it.
+                toggle_lens = toggle_button(ui, "search", lens_on, tl!("Magnifier"));
                 toggle_keys = toggle_button(ui, "keyboard", keys_on, tl!("Virtual keyboard"));
                 toggle_sheet = icons::button(ui, "layers", TOUCH, sheet_open, tl!("Panels")).clicked();
             });
@@ -241,6 +245,36 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The virtual mouse's own buttons, floating at the canvas's bottom right while the pointer is on: a right click where
+/// the pointer is (aimed, unlike a two-finger tap), and the precise mode for fine work.
+fn mouse_bar(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let canvas = app.last_canvas_rect;
+    if !app.virtual_mouse.is_on() || !canvas.is_positive() {
+        return;
+    }
+    let precise = app.virtual_mouse.precise_on();
+    let (mut right, mut fine) = (false, false);
+    egui::Area::new(egui::Id::new("phone-mouse-bar"))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::RIGHT_BOTTOM)
+        .fixed_pos(canvas.right_bottom() - vec2(10.0, 12.0))
+        .show(ctx, |ui| {
+            Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    right = icons::button(ui, "ellipsis", TOUCH, false, "Right click").clicked();
+                    fine = toggle_button(ui, "scan", precise, "Precise pointer");
+                });
+            });
+        });
+    if right {
+        app.virtual_mouse.right_click();
+    }
+    if fine {
+        app.virtual_mouse.toggle_precise();
+    }
+}
+
 /// A top-bar button that is a switch: it shows whether it is on, to a screen reader too. Returns whether it
 /// was pressed.
 fn toggle_button(ui: &mut egui::Ui, icon: &str, on: bool, tooltip: &str) -> bool {
@@ -259,7 +293,12 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             let r = ui.max_rect();
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
-            egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
+            // No scroll bar: on a touch screen it is a second, inverted drag handle under the buttons, which made the
+            // strip catch and jump. A finger drags the strip itself, and it glides on after a flick.
+            egui::ScrollArea::horizontal()
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     // The same slot keys as the desktop toolbar, so both remember the last tool used.
@@ -322,7 +361,10 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
             ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
             let visible = ui.available_width();
-            egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::horizontal()
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
                 ui.set_width(visible);
                 panels::options_strip(app, ui);
             });
@@ -426,7 +468,14 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
             } else {
                 tl!("Menu").to_string()
             };
-            ui.label(RichText::new(title).font(theme::semibold(15.0)).color(t.text));
+            ui.vertical(|ui| {
+                ui.label(RichText::new(title).font(theme::semibold(15.0)).color(t.text));
+                // Where the page is, under its name (File › Export), so a deep page never loses its place.
+                if !searching && path.len() > 1 {
+                    let trail: Vec<&str> = path[..path.len() - 1].iter().map(|p| i18n::tr(lang, p)).collect();
+                    ui.add(egui::Label::new(RichText::new(trail.join(" › ")).size(11.0).color(t.text_faint)).truncate());
+                }
+            });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icons::button(ui, "x", TOUCH, false, tl!("Close menu")).clicked() {
                     close = true;
@@ -436,16 +485,35 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let field = ui.available_width();
         ui.add_sized(vec2(field, TOUCH), egui::TextEdit::singleline(&mut query).hint_text(tl!("Search commands")));
         ui.separator();
-        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+        // Each page keeps its own scroll: a page opened from far down a long menu starts at its top.
+        let page_id = if searching { vec!["\u{1}search".to_string()] } else { path.clone() };
+        egui::ScrollArea::vertical().id_salt(("phone-menu-page", page_id)).auto_shrink([false, true]).show(ui, |ui| {
             let needle = query.trim();
             if needle.is_empty() {
-                let page = menu_page(&items, &path);
-                for item in &page.commands {
-                    command_row(ui, item, lang, &mut picked, "");
-                }
-                for name in &page.submenus {
-                    if menu_row(ui, i18n::tr(lang, name), "", false, true, true).clicked() {
-                        path.push(name.clone());
+                // The page as the desktop menu has it: commands and submenus in their order, with the separators
+                // between groups. What this build cannot run is left out, and a submenu with nothing it can run too.
+                let mut gap = true;
+                for entry in page_entries(&items, &path) {
+                    match entry {
+                        PageEntry::Separator => {
+                            if !gap {
+                                ui.add_space(4.0);
+                                let r = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), Sense::hover()).0;
+                                ui.painter().line_segment([r.left_center(), r.right_center()], Stroke::new(2.0, t.separator));
+                                ui.add_space(4.0);
+                                gap = true;
+                            }
+                        }
+                        PageEntry::Command(item) => {
+                            command_row(ui, item, lang, &mut picked, "");
+                            gap = false;
+                        }
+                        PageEntry::Submenu { name, enabled } => {
+                            if menu_row(ui, i18n::tr(lang, &name), "", false, enabled, true).clicked() && enabled {
+                                path.push(name.clone());
+                            }
+                            gap = false;
+                        }
                     }
                 }
             } else {
@@ -461,6 +529,12 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         });
     });
+    // The back key (Escape) goes back a page; on the top page it closes the menus.
+    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let back = !close && modal.should_close() && escape && !path.is_empty() && query.trim().is_empty();
+    if back {
+        path.pop();
+    }
     ctx.data_mut(|d| d.insert_temp(menu_query_id(), query));
     ctx.data_mut(|d| d.insert_temp(menu_path_id(), path));
     if let Some(cmd) = picked {
@@ -469,7 +543,7 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let _ = notices::post(app, "PhotoDroid", vec![e], true, None);
         }
     }
-    if close || modal.should_close() {
+    if close || (modal.should_close() && !back) {
         set_flag(ctx, menu_open_id(), false);
         ctx.data_mut(|d| d.insert_temp(menu_path_id(), Vec::<String>::new()));
     }
@@ -507,6 +581,70 @@ fn menu_page<'a>(items: &'a [menus::MenuItem], at: &[String]) -> MenuPage<'a> {
         }
     }
     MenuPage { commands, submenus }
+}
+
+/// One line of a menu page, in the desktop menu's order.
+enum PageEntry<'a> {
+    Command(&'a menus::MenuItem),
+    /// A submenu, enabled while something under it can run.
+    Submenu {
+        name: String,
+        enabled: bool,
+    },
+    Separator,
+}
+
+/// The page at `at` as the phone shows it: commands, submenus (where their first item is) and separators, in order.
+/// Commands this build does not have are left out, and so are submenus with none it has; separators are not doubled,
+/// and none starts or ends the page. The top page lists the top menus.
+fn page_entries<'a>(items: &'a [menus::MenuItem], at: &[String]) -> Vec<PageEntry<'a>> {
+    let live = |i: &menus::MenuItem| i.label != "---" && menus::is_live(&i.id);
+    // Whether the submenu `name` holds anything this build has, and anything that can run now.
+    let state = |name: &str| {
+        let mut has = (false, false);
+        for i in items.iter().filter(|i| i.path.len() > at.len() && i.path.starts_with(at) && i.path[at.len()] == name) {
+            if live(i) {
+                has = (true, has.1 || i.enabled);
+            }
+        }
+        has
+    };
+    let mut out: Vec<PageEntry<'a>> = Vec::new();
+    if at.is_empty() {
+        for name in menu_page(items, at).submenus {
+            let (shown, enabled) = state(&name);
+            if shown {
+                out.push(PageEntry::Submenu { name, enabled });
+            }
+        }
+        return out;
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for item in items.iter().filter(|i| i.path.starts_with(at)) {
+        if item.path.len() == at.len() {
+            if item.label == "---" {
+                if !matches!(out.last(), None | Some(PageEntry::Separator)) {
+                    out.push(PageEntry::Separator);
+                }
+            } else if live(item) {
+                out.push(PageEntry::Command(item));
+            }
+        } else {
+            let name = item.path[at.len()].as_str();
+            if seen.contains(&name) {
+                continue;
+            }
+            seen.push(name);
+            let (shown, enabled) = state(name);
+            if shown {
+                out.push(PageEntry::Submenu { name: name.to_string(), enabled });
+            }
+        }
+    }
+    while matches!(out.last(), Some(PageEntry::Separator)) {
+        out.pop();
+    }
+    out
 }
 
 /// One row of the menu sheet, a full-width touch target: the label, a line under it (a search result's
@@ -798,6 +936,33 @@ mod tests {
         let typ = menu_page(&items, &["Type".to_string()]);
         assert_eq!(ids(&typ.commands), ["type.createWorkPath"]);
         assert_eq!(typ.submenus, ["Anti-Alias"]);
+    }
+
+    /// A page lists commands and submenus in the menu's own order, with single separators between the groups, and
+    /// leaves out what this build cannot run (and a submenu of nothing else).
+    #[test]
+    fn a_menu_page_keeps_the_menus_order_and_leaves_out_what_cannot_run() {
+        let items = vec![
+            menu_item("---", &["File"]),
+            menu_item("file.open", &["File"]),
+            menu_item("---", &["File"]),
+            menu_item("---", &["File"]),
+            menu_item("file.notInThisBuild", &["File"]),
+            menu_item("file.export.exportAs", &["File", "Export"]),
+            menu_item("---", &["File"]),
+            menu_item("file.automate.notInThisBuild", &["File", "Automate"]),
+            menu_item("file.save", &["File"]),
+            menu_item("---", &["File"]),
+        ];
+        let shown: Vec<String> = page_entries(&items, &["File".to_string()])
+            .iter()
+            .map(|e| match e {
+                PageEntry::Command(i) => i.id.clone(),
+                PageEntry::Submenu { name, .. } => format!("{name} ›"),
+                PageEntry::Separator => "—".into(),
+            })
+            .collect();
+        assert_eq!(shown, ["file.open", "—", "Export ›", "—", "file.save"]);
     }
 
     /// On the phone a dialog takes the room the screen leaves it; elsewhere it keeps its own width.

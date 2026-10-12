@@ -2511,6 +2511,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
     }
 
+    // On the phone a held drag of the virtual mouse at the canvas's edge pans the picture, so the stroke or outline can
+    // go on past the screen's edge (`VirtualMouse::edge_push`).
+    if primary && app.phone_layout {
+        let push = app.virtual_mouse.edge_push(rect);
+        if push != Vec2::ZERO {
+            let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.05);
+            let d = xf.unmap_vec(push * dt) / (view.zoom / ppp);
+            view.center[0] += d.x;
+            view.center[1] += d.y;
+        }
+    }
+
     // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools ›
     // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
     app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
@@ -2593,13 +2605,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             crate::color_range_ui::canvas_eyedropper(app, &ctx, p, press);
         }
     }
+    // On the phone two fingers pan and zoom; the tool gets nothing from them (`touch_guard`).
+    let pinching = primary && crate::touch_guard::pinching(app, &ctx);
     if tool == Tool::Hand && response.dragged() {
         let d = xf.unmap_vec(response.drag_delta()) / (view.zoom / ppp);
         view.center[0] -= d.x;
         view.center[1] -= d.y;
         // The tool cursors below are skipped while panning: the fist is set here (#2196).
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
-    } else if primary {
+    } else if primary && !pinching {
         let mods = ui.input(|i| i.modifiers);
         // An ⌥-click the window manager took never arrives; say so (alt_grab.rs).
         crate::alt_grab::watch(app, &ctx, egui::Id::new(("pc-alt-grab", idx)), rect, tool, !under_dialog);

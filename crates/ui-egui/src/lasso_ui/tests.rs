@@ -291,3 +291,51 @@ fn clicking_the_last_point_again_closes_the_outline() {
     assert!(!active(&app));
     assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(150, 100, 0) > 0.9);
 }
+
+/// On the phone a lift leaves the outline open; the next touch goes on, ↶ takes the last piece away, and coming back
+/// to the first point closes it.
+#[test]
+fn on_the_phone_a_lift_keeps_the_outline_open_until_it_comes_back_to_its_start() {
+    let mut app = app();
+    app.phone_layout = true;
+    app.ui.views[0].zoom = 1.0;
+    begin(&mut app, Modifiers::NONE);
+    event(&mut app, "up", 120.0, 50.0, Modifiers::NONE);
+    assert!(active(&app), "a lift does not close it");
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+    // The next touch goes on from where the last stopped.
+    event(&mut app, "down", 120.0, 50.0, Modifiers::NONE);
+    event(&mut app, "move", 160.0, 120.0, Modifiers::NONE);
+    event(&mut app, "move", 200.0, 200.0, Modifiers::NONE);
+    event(&mut app, "up", 200.0, 200.0, Modifiers::NONE);
+    assert!(active(&app));
+    // ↶ takes that piece away, and only that piece.
+    assert!(undo_piece(&mut app));
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 3, "back to the first piece");
+    // Drawn again, and back to the first point: closed.
+    event(&mut app, "down", 120.0, 50.0, Modifiers::NONE);
+    for [x, y] in [[160.0, 120.0], [200.0, 200.0], [150.0, 220.0], [90.0, 180.0], [60.0, 120.0], [52.0, 60.0]] {
+        event(&mut app, "move", x, y, Modifiers::NONE);
+    }
+    event(&mut app, "up", 51.0, 52.0, Modifiers::NONE);
+    assert!(!active(&app), "back at the start it closes");
+    assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(110, 110, 0) > 0.9);
+}
+
+#[test]
+fn on_the_phone_cancel_drops_the_outline_and_a_pinch_leaves_it_open() {
+    let mut app = app();
+    app.phone_layout = true;
+    app.ui.views[0].zoom = 1.0;
+    begin(&mut app, Modifiers::NONE);
+    event(&mut app, "up", 120.0, 50.0, Modifiers::NONE);
+    event(&mut app, "down", 120.0, 50.0, Modifiers::NONE);
+    event(&mut app, "move", 125.0, 60.0, Modifiers::NONE);
+    // A second finger lands at once: the piece just started goes, the outline stays.
+    pinched(&mut app, true);
+    assert!(active(&app));
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 3);
+    cancel(&mut app);
+    assert!(!active(&app));
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+}
