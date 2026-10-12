@@ -284,7 +284,9 @@ fn mouse_bar(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         open_at_press = false;
     }
-    ctx.data_mut(|d| d.insert_temp(state, (egui::Popup::is_any_open(ctx), open_at_press)));
+    // Read before the write: egui's context is locked inside `data_mut`, and asking it anything there hangs.
+    let open_after = egui::Popup::is_any_open(ctx);
+    ctx.data_mut(|d| d.insert_temp(state, (open_after, open_at_press)));
     if fine {
         app.virtual_mouse.toggle_precise();
     }
