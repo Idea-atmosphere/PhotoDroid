@@ -347,11 +347,22 @@ fn grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) -> Mesh
 /// Room for both component columns, including units, without overflowing the title's width.
 pub(crate) const CONTENT_WIDTH: f32 = 624.0;
 
+/// The picker's width: [`CONTENT_WIDTH`], or on the phone (`room` from `mobile::dialog_room`) the room the
+/// screen leaves, less the picker's wider frame. Below [`CONTENT_WIDTH`] the columns stack ([`body`]).
+pub(crate) fn content_width(room: Option<f32>) -> f32 {
+    room.map_or(CONTENT_WIDTH, |r| (r - 20.0).clamp(200.0, CONTENT_WIDTH))
+}
+
 /// Draw the picker and its top-right actions. `Some(true)` confirms, `Some(false)` cancels.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
-    ui.set_width(CONTENT_WIDTH);
+    // On the phone the picker takes the width the dialog has, and the swatches, buttons and fields go
+    // under the colour field instead of beside it.
+    let width = if crate::mobile::gestures_on(ui.ctx()) { ui.available_width().clamp(200.0, CONTENT_WIDTH) } else { CONTENT_WIDTH };
+    ui.set_width(width);
+    let stacked = width < CONTENT_WIDTH;
+    let layout = if stacked { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
     let mut outcome = None;
-    ui.horizontal_top(|ui| {
+    ui.with_layout(layout, |ui| {
         ui.spacing_mut().item_spacing.x = 20.0;
         ui.vertical(|ui| {
             ui.horizontal_top(|ui| {

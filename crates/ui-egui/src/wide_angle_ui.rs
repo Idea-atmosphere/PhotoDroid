@@ -206,6 +206,18 @@ fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.run("filter.adaptiveWideAngle", d.command_params())
 }
 
+/// Does a dialog body this wide put the panel under the preview? Below this width the preview beside
+/// a [`PANEL_W`] panel would be narrower than the panel.
+fn stack_panel(width: f32) -> bool {
+    width < PANEL_W * 2.0
+}
+
+/// The preview's height when the panel is under it: a little under half the body, and room for at
+/// least a few rows of the panel.
+fn stacked_preview_height(body: f32) -> f32 {
+    (body * 0.45).max(160.0).min((body - 220.0).max(body * 0.35))
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.wide_angle.is_none() {
         return;
@@ -227,7 +239,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.text(title.center(), Align2::CENTER_CENTER, format!("Adaptive Wide Angle ({})", d.layer_name), FontId::proportional(13.0), t.text);
         let footer_h = 48.0;
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
-        let view = ERect::from_min_max(body.min, pos2(body.right() - PANEL_W, body.bottom())).shrink(16.0);
+        // A narrow window (a phone held upright) puts the panel under the preview, as wide as the window.
+        let stacked = stack_panel(body.width());
+        let split = body.top() + stacked_preview_height(body.height());
+        let view = if stacked {
+            ERect::from_min_max(body.min, pos2(body.right(), split)).shrink(16.0)
+        } else {
+            ERect::from_min_max(body.min, pos2(body.right() - PANEL_W, body.bottom())).shrink(16.0)
+        };
         painter.rect_filled(view, 0.0, t.canvas);
         let s = (view.width() / d.pw as f32).min(view.height() / d.ph as f32);
         let img_r = ERect::from_center_size(view.center(), vec2(d.pw as f32 * s, d.ph as f32 * s));
@@ -259,7 +278,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             d.dirty = true;
         }
         let cam = Camera::new(&d.params, d.frame);
-        if resp.secondary_clicked()
+        // A finger has no right button: on the phone a long press deletes instead.
+        if (resp.secondary_clicked() || (resp.long_touched() && crate::mobile::gestures_on(ui.ctx())))
             && let Some(p) = resp.interact_pointer_pos()
         {
             // Delete the constraint whose curve passes nearest the click.
@@ -314,9 +334,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             painter.add(egui::Shape::line(pts, Stroke::new(2.0, t.accent_soft)));
         }
         // Panel.
-        let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
+        let right = if stacked { ERect::from_min_max(pos2(body.left(), split), body.max) } else { ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max) };
         painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
+        if stacked {
+            painter.line_segment([right.left_top(), right.right_top()], Stroke::new(1.0, t.separator));
+        } else {
+            painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
+        }
         let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0))));
         egui::ScrollArea::vertical().id_salt("awa-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 5.0;

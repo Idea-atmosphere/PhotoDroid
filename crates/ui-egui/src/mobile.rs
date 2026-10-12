@@ -112,8 +112,16 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     virtual_input::panel(app, ui, covered);
     tool_strip(app, ui);
     options(app, ui);
-    sheet(app, ui);
+    // Held sideways the sheet goes to the right of the picture, under the top bar (see `side_sheet`);
+    // upright it goes above the options, as wide as the screen.
+    let side = side_sheet(ui.ctx().content_rect().size());
+    if !side {
+        sheet(app, ui);
+    }
     top_bar(app, ui);
+    if side {
+        sheet(app, ui);
+    }
     menu(app, ui.ctx());
     app.virtual_mouse.overlay(ui.ctx());
 }
@@ -329,12 +337,21 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let t = Tokens::get(&ctx);
     let group = ctx.data(|d| d.get_temp::<Group>(sheet_group_id())).unwrap_or(Group::Layers);
-    let screen = ctx.content_rect().height();
+    let screen = ctx.content_rect().size();
     let (mut pick, mut close) = (None, false);
-    egui::Panel::bottom("phone-sheet")
-        .resizable(true)
-        .default_size((screen * 0.4).max(220.0))
-        .size_range(220.0..=(screen * 0.85).max(260.0))
+    let panel = if side_sheet(screen) {
+        egui::Panel::right("phone-sheet-side")
+            .resizable(true)
+            // Room at least for the row of group icons and the hide button.
+            .default_size((screen.x * 0.42).max(300.0))
+            .size_range(290.0..=(screen.x * 0.6).max(300.0))
+    } else {
+        egui::Panel::bottom("phone-sheet")
+            .resizable(true)
+            .default_size((screen.y * 0.4).max(220.0))
+            .size_range(220.0..=(screen.y * 0.85).max(260.0))
+    };
+    panel
         .frame(Frame::NONE.fill(t.dock).inner_margin(Margin::same(6)))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -359,6 +376,15 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ctx.data_mut(|d| d.insert_temp(sheet_group_id(), g));
     }
 }
+
+/// Does the panels sheet go beside the picture? It does on a phone held sideways: there a sheet above
+/// the options would leave the picture a strip, and the screen's width has room for both.
+pub fn side_sheet(screen: Vec2) -> bool {
+    screen.x > screen.y * 1.3 && screen.x >= 560.0
+}
+
+/// The menu sheet's widest: on a phone held sideways a row across the whole screen is hard to read.
+const MENU_MAX_WIDTH: f32 = 560.0;
 
 /// The menu sheet's rows: a finger's target, with room for a second line under the label.
 const MENU_ROW: f32 = 52.0;
@@ -385,7 +411,7 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let lift = virtual_input::lift(app);
     let area = egui::Modal::default_area(sheet).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -8.0 - lift));
     let modal = egui::Modal::new(sheet).area(area).show(ctx, |ui| {
-        ui.set_width(dialog_room(screen.size()));
+        ui.set_width(dialog_room(screen.size()).min(MENU_MAX_WIDTH));
         ui.set_max_height((screen.height() * 0.8 - lift).max(260.0));
         let searching = !query.trim().is_empty();
         ui.horizontal(|ui| {
@@ -553,6 +579,19 @@ pub fn fit_width(desired: f32, room: Option<f32>) -> f32 {
     room.map_or(desired, |r| desired.min(r))
 }
 
+/// The width of a floating window (a panel, a small dialog of its own) that wants `desired`: on the
+/// phone layout no wider than the screen less a margin on each side and the window's frame, so that
+/// it does not run off the screen; elsewhere `desired`.
+pub fn window_width(ctx: &egui::Context, desired: f32) -> f32 {
+    if gestures_on(ctx) { fit_width(desired, Some(window_room(ctx.content_rect().size()))) } else { desired }
+}
+
+/// The room a floating window's content has on the phone: the screen less a margin and a frame on each
+/// side, and at least 160 points.
+fn window_room(screen: Vec2) -> f32 {
+    (screen.x - 48.0).max(160.0)
+}
+
 /// The parameters the phone's menu passes a command. Its Type options (Anti-Alias, Orientation,
 /// OpenType) change every type layer of the document, as a PSD's texts are meant to share them;
 /// the desktop menus pass nothing and change the active layer only.
@@ -637,6 +676,15 @@ mod tests {
         let typed: Vec<String> =
             h.state().virtual_input.queued().iter().filter_map(|e| if let egui::Event::Text(t) = e { Some(t.clone()) } else { None }).collect();
         assert_eq!(typed, ["q"]);
+    }
+
+    /// Held sideways the panels go beside the picture; upright, and on a square screen, under it.
+    #[test]
+    fn the_panels_sheet_goes_beside_the_picture_only_when_the_phone_is_sideways() {
+        assert!(side_sheet(vec2(891.0, 411.0)));
+        assert!(!side_sheet(vec2(411.0, 891.0)));
+        assert!(!side_sheet(vec2(520.0, 500.0)));
+        assert!(!side_sheet(vec2(500.0, 300.0)), "too narrow for the sheet and a picture beside it");
     }
 
     #[test]
@@ -761,5 +809,18 @@ mod tests {
         assert_eq!(fit_width(380.0, Some(room)), 380.0);
         assert_eq!(fit_width(800.0, None), 800.0);
         assert_eq!(dialog_room(vec2(120.0, 300.0)), 200.0);
+    }
+
+    /// On the phone a floating window keeps within the screen; elsewhere it keeps its width.
+    #[test]
+    fn a_floating_window_fits_the_phone_screen_and_keeps_its_width_elsewhere() {
+        assert_eq!(window_room(vec2(411.0, 891.0)), 363.0);
+        assert_eq!(window_room(vec2(100.0, 300.0)), 160.0);
+        let ctx = egui::Context::default();
+        let mut widths = Vec::new();
+        frame(&ctx, true, egui::RawInput::default(), |ui| widths.push(window_width(ui.ctx(), 100_000.0) < 100_000.0));
+        frame(&ctx, true, egui::RawInput::default(), |ui| widths.push(window_width(ui.ctx(), 120.0) == 120.0));
+        frame(&ctx, false, egui::RawInput::default(), |ui| widths.push(window_width(ui.ctx(), 100_000.0) == 100_000.0));
+        assert_eq!(widths, [true, true, true]);
     }
 }

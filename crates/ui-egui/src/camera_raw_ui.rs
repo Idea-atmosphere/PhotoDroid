@@ -836,8 +836,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status_error = true;
     }
     let Some(d) = app.camera_raw.as_ref() else { return };
-    // Where the platform has no extra windows (the web build), draw over the main window.
-    if ctx.embed_viewports() {
+    // Where the platform has no extra windows (the web build, a phone), draw over the main window.
+    if ctx.embed_viewports() || crate::mobile::active(app, ctx) {
         draw(app, ctx, false);
         return;
     }
@@ -874,6 +874,18 @@ impl CameraRawDialog {
     }
 }
 
+/// Does a dialog body this wide put the panels under the preview? Below this width the preview
+/// beside a [`PANEL_W`] panel would be narrower than the panel.
+fn stack_panels(width: f32) -> bool {
+    width < PANEL_W * 2.0
+}
+
+/// The preview's height when the panels are under it: a little under half the body, and room for at
+/// least a few rows of the panels.
+fn stacked_preview_height(body: f32) -> f32 {
+    (body * 0.42).max(160.0).min((body - 220.0).max(body * 0.35))
+}
+
 /// The dialog's contents over the whole of `ctx`'s window. `own_window`: the OS window already
 /// shows the title, so none is painted.
 fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
@@ -901,7 +913,15 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
         let scope = &mut app.ui.camera_raw_scope;
         // Clip both pixels and scope overlays before painting the settings dock/footer.
-        let preview_body = ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()));
+        // A narrow window (a phone held upright) puts the panels under the preview, as wide as the
+        // window: beside it they would leave the preview a sliver.
+        let stacked = stack_panels(body.width());
+        let split = body.top() + stacked_preview_height(body.height());
+        let preview_body = if stacked {
+            ERect::from_min_max(body.min, pos2(body.right(), split))
+        } else {
+            ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()))
+        };
         let view = ERect::from_min_max(
             preview_body.min + vec2(16.0, 16.0),
             pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
@@ -941,9 +961,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
         }
         // Panels.
-        let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
+        let right = if stacked { ERect::from_min_max(pos2(body.left(), split), body.max) } else { ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max) };
         painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
+        if stacked {
+            painter.line_segment([right.left_top(), right.right_top()], Stroke::new(1.0, t.separator));
+        } else {
+            painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
+        }
         let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0))));
         // This header is outside the settings scroll area and follows the same Before/After
         // selector as the texture. Both derive from the same completed preview revision.

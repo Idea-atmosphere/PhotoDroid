@@ -152,10 +152,14 @@ fn estimate(app: &PhotocraftApp, doc: &Document, f: &Map<String, Value>) -> Opti
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|s| s.doc.clone()) else { return };
-    ui.horizontal_top(|ui| {
+    // On the phone the preview goes under the settings, as wide as the dialog lets it.
+    let room = ui.available_width();
+    let stacked = crate::mobile::gestures_on(ui.ctx()) && room < 220.0 + 12.0 + 300.0;
+    let layout = if stacked { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
         // Left: settings.
         ui.vertical(|ui| {
-            ui.set_width(220.0);
+            ui.set_width(room.min(220.0));
             ui.label(egui::RichText::new(tl!("File Settings")).font(crate::theme::semibold(12.0)).color(t.text));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Format")).color(t.text_dim));
@@ -228,7 +232,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     (size, tex)
                 }
             };
-            let side = 300.0;
+            let side = room.min(300.0);
             let (r, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
             crate::widgets::checker(ui.painter(), r, 8.0);
             let ts = tex.size_vec2();

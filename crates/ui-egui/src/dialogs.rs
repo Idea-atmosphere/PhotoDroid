@@ -84,6 +84,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut shown = Vec::new();
     // On the phone a dialog takes the width the screen leaves it, and a body too tall for it scrolls.
     let room = crate::mobile::active(app, ctx).then(|| crate::mobile::dialog_room(ctx.content_rect().size()));
+    let phone = room.is_some();
     // With the virtual keyboard on, a dialog opens at the top of the screen and keeps clear of the keys.
     let lift = crate::virtual_input::lift(app);
     for d in dialogs {
@@ -152,7 +153,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_max_width(fit(w));
             }
             if color_picker {
-                ui.set_width(crate::color_picker_ui::CONTENT_WIDTH);
+                ui.set_width(crate::color_picker_ui::content_width(room));
             }
             let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
             let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
@@ -300,12 +301,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
         shown.push(if color_picker { modal.response.rect } else { modal.inner });
         // Pin once laid out at its real size (the first frame is an invisible sizing pass).
-        if !sizing && (pinned.is_none() || drag != egui::Vec2::ZERO) {
+        // On the phone the place is checked every frame: the screen turns, the virtual keyboard opens and a
+        // body grows, and the dialog must stay in reach through all of them.
+        if !sizing && (pinned.is_none() || drag != egui::Vec2::ZERO || phone) {
             let screen = ctx.content_rect();
-            // Keep the whole dialog (and so its title bar) on screen.
-            let room = (screen.size() - modal.response.rect.size()).max(egui::Vec2::ZERO);
+            // Keep the whole dialog (and so its title bar) on screen, and clear of the virtual keyboard.
+            let mut room = (screen.size() - modal.response.rect.size()).max(egui::Vec2::ZERO);
+            room.y = (room.y - lift).max(0.0);
             let offset = (pinned.unwrap_or(modal.response.rect.min - screen.min) + drag).clamp(egui::Vec2::ZERO, room);
-            ctx.data_mut(|m| m.insert_temp(id, offset));
+            if pinned != Some(offset) {
+                ctx.data_mut(|m| m.insert_temp(id, offset));
+            }
             // A dialog the user moved reopens there (Photoshop remembers each dialog's place).
             if drag != egui::Vec2::ZERO {
                 ctx.data_mut(|m| m.insert_persisted(place, offset));
