@@ -16,8 +16,13 @@
 //!   across it. Each stroke is an undo step.
 //! - Two fingers that tap together (neither moves) are a right click. Two fingers that move pinch or pan the canvas,
 //!   as they do without the pointer, and the pointer stays where it is.
-//! - The magnifier (a toggle in the top bar) draws a loupe above the pointer: the canvas around the pointer, enlarged,
-//!   so it is clear what the pointer is over.
+//! - The magnifier (a toggle in the top bar) draws a loupe in a corner of the screen while a finger works: the canvas
+//!   around the pointer (or, with the pointer off, around the finger), enlarged, so it is clear what is being touched.
+//!   It moves to the other corner when the work comes under it. It works with the pointer off too.
+//! - The pointer's own buttons float over the canvas while it is on: a right click where the pointer is (no two-finger
+//!   tap to aim), and the precise mode, which slows the pointer down for fine work.
+//! - A locked drag that reaches the canvas's edge pans the picture (`edge_push`), so a stroke or an outline can go on
+//!   past what the screen shows. A padlock beside the pointer shows that the lock is on.
 //!
 //! A touch off the canvas, or on a floating window over it, goes to the screen as it is, and so does a press that
 //! starts there; while such a press is held, the pointer draws nothing and sends no moves. The pointer's presses and
@@ -56,9 +61,14 @@ const RESUME_PRESS: f32 = 0.5;
 /// The loupe's side (points), and how much it enlarges the canvas.
 pub const LOUPE: f32 = 144.0;
 pub const MAGNIFY: f32 = 2.5;
-/// The loupe's gap from the pointer, and the room the top bar and the status bar take at the top of the screen.
-const LOUPE_GAP: f32 = 56.0;
-const TOP_CLEAR: f32 = 100.0;
+/// The loupe's margin from the screen's corner, and the room it keeps from the work it shows.
+const LOUPE_MARGIN: f32 = 8.0;
+const LOUPE_CLEAR: f32 = 24.0;
+/// The pointer's gain in the precise mode, on top of the usual gain.
+const PRECISE_GAIN: f32 = 0.35;
+/// A locked drag within this many points of the canvas's edge pans the picture, at up to [`EDGE_SPEED`] points a second.
+const EDGE: f32 = 28.0;
+const EDGE_SPEED: f32 = 700.0;
 
 /// A finger on the canvas: where it touched down, where it is, and the furthest it has been from the first place.
 #[derive(Clone, Copy, Debug)]
@@ -136,6 +146,10 @@ pub struct VirtualMouse {
     speed: f32,
     /// Events queued for the next frame (a button let go when the mouse went off or the screen was covered).
     queued: Vec<Event>,
+    /// The precise mode: the pointer moves at [`PRECISE_GAIN`] of its usual speed.
+    precise: bool,
+    /// A locked drag is at the canvas's edge, panning the picture (see [`VirtualMouse::edge_push`]).
+    pushing: bool,
     /// Whether egui's primary press started on the canvas (`Some(true)`) or on the screen (`Some(false)`); `None` while
     /// no press is down.
     press: Option<bool>,
@@ -149,6 +163,29 @@ impl VirtualMouse {
     /// Whether the magnifier's loupe is on (it shows the pointer's place, so the pointer is on with it).
     pub fn magnifier_on(&self) -> bool {
         self.magnifier
+    }
+
+    /// Whether the precise mode is on (the pointer moves slower, for fine work).
+    pub fn precise_on(&self) -> bool {
+        self.precise
+    }
+
+    pub fn toggle_precise(&mut self) {
+        self.precise = !self.precise;
+    }
+
+    /// A right click where the pointer is, in the next frame: the floating button's, aimed with the pointer rather than
+    /// with two fingers.
+    pub fn right_click(&mut self) {
+        if !self.on {
+            return;
+        }
+        let Some(p) = self.pos else { return };
+        if let Some(e) = self.release_now() {
+            self.queued.push(e);
+        }
+        self.queued.push(Event::PointerMoved(p));
+        click(p, PointerButton::Secondary, Modifiers::NONE, &mut self.queued);
     }
 
     /// Whether the drag lock is on: the button stays held across lifts, until a double tap turns the lock off.
@@ -166,13 +203,13 @@ impl VirtualMouse {
         if self.on && !self.covered { self.pos } else { None }
     }
 
-    /// Turns the pointer on (in the middle of `canvas`, unless it is still on the canvas where it was), or off. Off
-    /// ends the magnifier too, since its loupe shows the pointer's place.
+    /// Turns the pointer on (in the middle of `canvas`, unless it is still on the canvas where it was), or off. The
+    /// magnifier stays as it is: with the pointer off it follows the finger.
     pub fn toggle(&mut self, canvas: Rect) {
         if self.on {
             self.stop();
             self.on = false;
-            self.magnifier = false;
+            self.pushing = false;
         } else {
             self.on = true;
             // Before the canvas is laid out there is no place for the pointer yet.
@@ -184,16 +221,9 @@ impl VirtualMouse {
         }
     }
 
-    /// The magnifier: a loupe above the pointer. The loupe needs the pointer, so the pointer comes on with it.
-    pub fn toggle_magnifier(&mut self, canvas: Rect) {
-        if self.magnifier {
-            self.magnifier = false;
-        } else {
-            if !self.on {
-                self.toggle(canvas);
-            }
-            self.magnifier = true;
-        }
+    /// The magnifier: a loupe in a corner of the screen, around the pointer or the finger. It needs no pointer.
+    pub fn toggle_magnifier(&mut self, _canvas: Rect) {
+        self.magnifier = !self.magnifier;
     }
 
     /// Whether a dialog or the menu covers the screen. Covering ends everything the fingers were doing (the drag lock
@@ -207,7 +237,18 @@ impl VirtualMouse {
 
     /// Whether a frame should come soon, though no input does: the pointer is still easing to its target.
     pub fn wants_frames(&self) -> bool {
-        self.on && !self.covered && self.pos.zip(self.target).is_some_and(|(p, t)| (t - p).length() > SETTLED)
+        self.on && !self.covered && (self.pushing || self.pos.zip(self.target).is_some_and(|(p, t)| (t - p).length() > SETTLED))
+    }
+
+    /// The picture's pan this frame (points a second, screen axes: where the view should move) while a held drag is at
+    /// the edge of `canvas`: the nearer the edge, the faster. Zero otherwise.
+    pub fn edge_push(&mut self, canvas: Rect) -> Vec2 {
+        let push = match self.shown_at() {
+            Some(p) if self.down && canvas.is_positive() && canvas.contains(p) => edge_velocity(p, canvas),
+            _ => Vec2::ZERO,
+        };
+        self.pushing = push != Vec2::ZERO;
+        push
     }
 
     /// Ends what the fingers were doing: a held button is let go (in the next frame), and the drag lock goes.
@@ -475,7 +516,8 @@ impl VirtualMouse {
         if moved != Vec2::ZERO
             && let Some(t) = self.target
         {
-            let next = t + moved * gain(self.speed);
+            let precise = if self.precise { PRECISE_GAIN } else { 1.0 };
+            let next = t + moved * gain(self.speed) * precise;
             self.target = Some(within(next, step.canvas));
         }
         let (Some(p), Some(t)) = (self.pos, self.target) else { return };
@@ -528,24 +570,51 @@ impl VirtualMouse {
     }
 
     /// Draws the pointer (an arrow whose tip is the point, and a dot on the point: accent while the button is down or
-    /// the drag lock is on), and the loupe when the magnifier is on. The dot is painted last, so that the arrow's tip
-    /// does not cover it.
+    /// the drag lock is on, with a padlock beside it while the lock is on), and the loupe when the magnifier is on and a
+    /// finger is working. The dot is painted last, so that the arrow's tip does not cover it.
     pub fn overlay(&self, ctx: &egui::Context) {
-        let Some(p) = self.shown_at() else { return };
-        let t = Tokens::get(ctx);
-        // The loupe shows the picture, so it is drawn only while the pointer is over the picture (not over the top bar).
         if self.magnifier
+            && !self.covered
+            && let Some(p) = self.loupe_point(ctx)
             && let Some(view) = ctx.data(|d| d.get_temp::<CanvasView>(view_id()))
             && view.img.contains(p)
         {
             draw_loupe(ctx, p, view);
         }
+        let Some(p) = self.shown_at() else { return };
+        let t = Tokens::get(ctx);
         // The arrow's tip is at about 3.6 of its 24 units from the top-left corner.
         icons::cursor(ctx, "mouse-pointer-2", p, vec2(3.6, 3.6) / 24.0, 28.0);
         let dot = if self.locked || self.down { t.accent } else { Color32::WHITE };
         let painter = ctx.layer_painter(LayerId::new(Order::Debug, Id::new("virtual-mouse-dot")));
+        if self.locked {
+            let badge = Rect::from_center_size(p + vec2(-14.0, 16.0), vec2(18.0, 18.0));
+            painter.circle_filled(badge.center(), 10.0, Color32::from_black_alpha(170));
+            // A padlock: a body, and a shackle (a half circle on two legs) over it.
+            let c = badge.center();
+            painter.rect_filled(Rect::from_center_size(c + vec2(0.0, 2.5), vec2(10.0, 7.0)), 1.5, t.accent);
+            let shackle: Vec<Pos2> = (0..=8)
+                .map(|k| {
+                    let a = std::f32::consts::PI * (1.0 + k as f32 / 8.0);
+                    c + vec2(3.0 * a.cos(), -1.0 + 3.0 * a.sin())
+                })
+                .collect();
+            let mut path = vec![c + vec2(-3.0, 0.0)];
+            path.extend(shackle);
+            path.push(c + vec2(3.0, 0.0));
+            painter.add(egui::Shape::line(path, Stroke::new(1.6, t.accent)));
+        }
         painter.circle_filled(p, 3.0, dot);
         painter.circle_stroke(p, 3.0, Stroke::new(1.0, Color32::from_black_alpha(200)));
+    }
+
+    /// What the loupe shows: the pointer's place while a finger moves it or its button is down, or, with the pointer
+    /// off, the finger on the canvas. Nothing while no finger works, so the loupe hides the picture only when it helps.
+    fn loupe_point(&self, ctx: &egui::Context) -> Option<Pos2> {
+        if self.on {
+            return (self.pad.is_some() || self.down).then_some(self.pos).flatten();
+        }
+        ctx.input(|i| (i.any_touches() && i.pointer.primary_down()).then(|| i.pointer.latest_pos()).flatten())
     }
 }
 
@@ -564,16 +633,23 @@ fn view_id() -> Id {
     Id::new("virtual-mouse-canvas-view")
 }
 
-/// The loupe: the canvas around the pointer, enlarged by [`MAGNIFY`], above the pointer (below it where the top of the
-/// screen has no room), with a ring on the pointer's place. Where the sample reaches past the picture, the loupe stays
-/// white there.
+/// Where the loupe goes on `screen`: the top-left corner under the top bar (`top`), or the top-right one when the
+/// point it shows is under or near the left one.
+fn loupe_rect(screen: Rect, top: f32, p: Pos2) -> Rect {
+    let y = (top + LOUPE_MARGIN).min((screen.bottom() - LOUPE).max(screen.top()));
+    let left = Rect::from_min_size(pos2(screen.left() + LOUPE_MARGIN, y), vec2(LOUPE, LOUPE));
+    if !left.expand(LOUPE_CLEAR).contains(p) {
+        return left;
+    }
+    Rect::from_min_size(pos2((screen.right() - LOUPE_MARGIN - LOUPE).max(screen.left()), y), vec2(LOUPE, LOUPE))
+}
+
+/// The loupe: the canvas around the point, enlarged by [`MAGNIFY`], in a corner of the screen ([`loupe_rect`]), with a
+/// ring on the point's place. Where the sample reaches past the picture, the loupe stays white there.
 fn draw_loupe(ctx: &egui::Context, p: Pos2, view: CanvasView) {
     let screen = ctx.viewport_rect();
-    let above = p.y - LOUPE_GAP - LOUPE;
-    let top = if above >= screen.top() + TOP_CLEAR { above } else { p.y + LOUPE_GAP };
-    let left = (p.x - LOUPE / 2.0).clamp(screen.left(), (screen.right() - LOUPE).max(screen.left()));
-    let top = top.clamp(screen.top(), (screen.bottom() - LOUPE).max(screen.top()));
-    let loupe = Rect::from_min_size(pos2(left, top), vec2(LOUPE, LOUPE));
+    let top = crate::mobile::top_bar_rect(ctx).map_or(screen.top(), |r| r.bottom());
+    let loupe = loupe_rect(screen, top, p);
     let painter = ctx.layer_painter(LayerId::new(Order::Debug, Id::new("virtual-mouse-loupe")));
     painter.rect_filled(loupe, 8.0, Color32::WHITE);
     let side = LOUPE / MAGNIFY;
@@ -607,6 +683,14 @@ fn gain(speed: f32) -> f32 {
     let fine = smooth(speed / PRECISE_BELOW.max(1.0));
     let fast = smooth((speed - ACCEL_FROM) / (ACCEL_TO - ACCEL_FROM));
     GAIN_MIN + (1.0 - GAIN_MIN) * fine + (GAIN_MAX - 1.0) * fast
+}
+
+/// The pan for a pointer at `p` near the edge of `canvas`: towards the edge it is near, faster the nearer it is.
+fn edge_velocity(p: Pos2, canvas: Rect) -> Vec2 {
+    let near = |d: f32| ((EDGE - d) / EDGE).clamp(0.0, 1.0);
+    let x = near(p.x - canvas.left()) * -1.0 + near(canvas.right() - p.x);
+    let y = near(p.y - canvas.top()) * -1.0 + near(canvas.bottom() - p.y);
+    vec2(x, y) * EDGE_SPEED
 }
 
 /// `p`, kept inside `r`. (Not `clamp`, which panics on an empty rectangle.)
