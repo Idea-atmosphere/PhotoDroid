@@ -265,6 +265,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         }
         ToolEvent::Move { .. } | ToolEvent::Up { .. } => {
             let up = matches!(ev, ToolEvent::Up { .. });
+            // On the phone a finger that is not drawing (one on the floating bar, say) does not pull the outline's
+            // loose end after it: the end stays where the outline stopped. The virtual mouse hovers, so its pointer
+            // still shows where the next tap goes.
+            let hover = !phone || app.virtual_mouse.is_on();
             let Some(d) = app.drag.as_mut().filter(|d| d.tool == Tool::Lasso) else { return true };
             let Some(lasso) = &d.lasso else { return true };
             let (down, polygonal, previous) = (lasso.down, lasso.polygonal, lasso.cursor);
@@ -278,7 +282,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 append(d, p);
             }
             if let Some(lasso) = &mut d.lasso {
-                lasso.cursor = p;
+                if down || hover {
+                    lasso.cursor = p;
+                }
                 if up {
                     lasso.down = false;
                 }

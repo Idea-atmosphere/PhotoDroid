@@ -253,6 +253,15 @@ fn mouse_bar(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let precise = app.virtual_mouse.precise_on();
+    // The right click button is a switch for the menu it opens: pressed while a menu is open, it only closes that
+    // menu. The press itself may close the menu before the button sees its click (a press outside a menu closes
+    // it), so whether one was open is taken from the frame before the press.
+    let state = egui::Id::new("phone-mouse-bar-menu");
+    let open_now = egui::Popup::is_any_open(ctx);
+    let (open_before, mut open_at_press): (bool, bool) = ctx.data(|d| d.get_temp(state)).unwrap_or_default();
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        open_at_press = open_before || open_now;
+    }
     let (mut right, mut fine) = (false, false);
     egui::Area::new(egui::Id::new("phone-mouse-bar"))
         .order(egui::Order::Foreground)
@@ -268,8 +277,14 @@ fn mouse_bar(app: &mut PhotocraftApp, ctx: &egui::Context) {
             });
         });
     if right {
-        app.virtual_mouse.right_click();
+        if open_at_press || egui::Popup::is_any_open(ctx) {
+            egui::Popup::close_all(ctx);
+        } else {
+            app.virtual_mouse.right_click();
+        }
+        open_at_press = false;
     }
+    ctx.data_mut(|d| d.insert_temp(state, (egui::Popup::is_any_open(ctx), open_at_press)));
     if fine {
         app.virtual_mouse.toggle_precise();
     }

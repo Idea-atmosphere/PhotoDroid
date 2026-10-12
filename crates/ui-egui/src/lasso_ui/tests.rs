@@ -339,3 +339,20 @@ fn on_the_phone_cancel_drops_the_outline_and_a_pinch_leaves_it_open() {
     assert!(!active(&app));
     assert!(app.session.active().unwrap().doc.selection.is_none());
 }
+
+/// On the phone a finger that is not drawing (one tapping the floating bar's ↶) leaves the outline's loose end where
+/// the outline stopped, instead of pulling it over to the bar.
+#[test]
+fn on_the_phone_a_tap_off_the_outline_does_not_pull_its_end() {
+    let mut app = app();
+    app.phone_layout = true;
+    app.ui.views[0].zoom = 1.0;
+    begin(&mut app, Modifiers::NONE);
+    event(&mut app, "up", 120.0, 50.0, Modifiers::NONE);
+    // The press on the bar never reaches the canvas; its moves and its lift do.
+    event(&mut app, "move", 150.0, 290.0, Modifiers::NONE);
+    event(&mut app, "up", 150.0, 290.0, Modifiers::NONE);
+    let d = app.drag.as_ref().unwrap();
+    assert_eq!(d.lasso.as_ref().unwrap().cursor, [120.0, 50.0]);
+    assert!(d.points.iter().all(|p| p[1] < 100.0), "nothing was drawn to the bar");
+}
