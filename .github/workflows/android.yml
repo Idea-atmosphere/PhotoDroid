@@ -2,9 +2,8 @@ name: Android
 
 on:
   push:
-    tags-ignore:
-      - "v*"
-      - "[0-9]*"
+    branches:
+      - "**"
   pull_request:
   workflow_dispatch:
 
