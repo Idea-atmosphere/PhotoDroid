@@ -1,0 +1,226 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 0.3.0 or v0.3.0)"
+        required: true
+        default: "0.3.0"
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: 27.2.12479018
+  CMDLINE_TOOLS_URL: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+
+jobs:
+  release:
+    name: Build signed PhotoDroid APK & Publish Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive version
+        id: version
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            RAW="${MANUAL_VERSION}"
+            NAME="${RAW#v}"
+            NAME="${NAME#V}"
+            TAG="v${NAME}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            NAME="${TAG#v}"
+            NAME="${NAME#V}"
+          fi
+
+          # Extract numeric MAJOR.MINOR.PATCH for integer versionCode calculation
+          CLEAN_VER="$(echo "$NAME" | grep -oE '^[0-9]+(\.[0-9]+){0,2}' || echo "0.3.0")"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN_VER"
+          MAJOR="${MAJOR:-0}"
+          MINOR="${MINOR:-3}"
+          PATCH="${PATCH:-0}"
+          CODE=$(( 10#$MAJOR * 10000 + 10#$MINOR * 100 + 10#$PATCH ))
+          if [ "$CODE" -lt 1 ]; then
+            CODE=1
+          fi
+
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Building PhotoDroid version $NAME (tag: $TAG, versionCode: $CODE)"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install the Android SDK packages
+        shell: bash
+        run: |
+          set -eo pipefail
+          SDK="$HOME/android-sdk"
+          if [ ! -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL -o "$RUNNER_TEMP/cmdline-tools.zip" "$CMDLINE_TOOLS_URL"
+            unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
+            mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          fi
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses > "$RUNNER_TEMP/licenses.log" 2>&1 || true
+          if ! "$SDKMANAGER" --sdk_root="$SDK" "platforms;android-35" "build-tools;35.0.0" "ndk;${NDK_VERSION}" > "$RUNNER_TEMP/sdk.log" 2>&1; then
+            bash .github/scripts/report-failure.sh "Android SDK install failed" "$RUNNER_TEMP/sdk.log"
+            tail -n 40 "$RUNNER_TEMP/sdk.log"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm64
+          cache-on-failure: true
+
+      - name: Point Cargo at the NDK's clang
+        shell: bash
+        run: |
+          NDK="$ANDROID_HOME/ndk/$NDK_VERSION"
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -x "$BIN/aarch64-linux-android29-clang" ]; then
+            echo "::error title=NDK missing::no clang at $BIN"
+            ls "$ANDROID_HOME/ndk" || true
+            exit 1
+          fi
+          {
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android29-clang"
+            echo "CC_aarch64_linux_android=$BIN/aarch64-linux-android29-clang"
+            echo "CXX_aarch64_linux_android=$BIN/aarch64-linux-android29-clang++"
+            echo "AR_aarch64_linux_android=$BIN/llvm-ar"
+          } >> "$GITHUB_ENV"
+
+      - name: Build libphotocraft_android.so
+        shell: bash
+        run: |
+          status=0
+          cargo build -p photocraft-android --lib --target aarch64-linux-android --profile android \
+            --keep-going --message-format=short > "$RUNNER_TEMP/cargo-build.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/cargo-build.log"
+          if [ "$status" -ne 0 ]; then
+            bash .github/scripts/report-failure.sh "cargo build failed" "$RUNNER_TEMP/cargo-build.log"
+            exit "$status"
+          fi
+
+      - name: Put the library in the APK
+        shell: bash
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/android/libphotocraft_android.so android/app/src/main/jniLibs/arm64-v8a/
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Decode signing keystore outside the workspace
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 is not set. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/release.jks"
+          if [ ! -s "$RUNNER_TEMP/release.jks" ]; then
+            echo "::error::Decoded keystore is empty. Re-create the secret with: base64 -w0 my-upload-key.jks"
+            exit 1
+          fi
+          echo "Keystore decoded ($(stat -c%s "$RUNNER_TEMP/release.jks") bytes)."
+
+      - name: Build signed release APK
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          status=0
+          gradle -p android :app:assembleRelease --no-daemon \
+            -PappVersionName="${{ steps.version.outputs.name }}" \
+            -PappVersionCode="${{ steps.version.outputs.code }}" > "$RUNNER_TEMP/gradle.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/gradle.log"
+          if [ "$status" -ne 0 ]; then
+            bash .github/scripts/report-failure.sh "Gradle release build failed" "$RUNNER_TEMP/gradle.log"
+            exit "$status"
+          fi
+
+      - name: Destroy the keystore
+        if: always()
+        shell: bash
+        run: shred -u "$RUNNER_TEMP/release.jks" 2>/dev/null || rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Verify and name the APK
+        id: apk
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          if [ -z "$SRC" ]; then
+            echo "::error::No release APK was produced."
+            exit 1
+          fi
+          case "$SRC" in
+            *unsigned*)
+              echo "::error::The APK is unsigned, which means the signing secrets were not applied. Refusing to publish it."
+              exit 1
+              ;;
+          esac
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$SRC"
+          bash .github/scripts/inspect-apk.sh "$SRC" \
+            "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" \
+            "$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          DEST="android/app/build/outputs/apk/release/PhotoDroid-v${VERSION_NAME}.apk"
+          [ "$SRC" = "$DEST" ] || mv "$SRC" "$DEST"
+          echo "path=$DEST" >> "$GITHUB_OUTPUT"
+          echo "filename=PhotoDroid-v${VERSION_NAME}.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoDroid-v${{ steps.version.outputs.name }}-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: PhotoDroid v${{ steps.version.outputs.name }}
+          generate_release_notes: true
+          prerelease: ${{ github.event_name != 'push' }}
+          make_latest: ${{ github.event_name == 'push' }}
+          files: ${{ steps.apk.outputs.path }}

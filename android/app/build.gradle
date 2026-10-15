@@ -2,20 +2,56 @@ plugins {
     id 'com.android.application'
 }
 
+// Release signing is driven by environment variables (KEYSTORE_PATH, STORE_PASSWORD,
+// KEY_ALIAS, KEY_PASSWORD) populated from GitHub Actions secrets:
+//   ANDROID_KEYSTORE_BASE64, ANDROID_STORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+// When those variables are absent (local builds or fork PRs without secrets), the build falls
+// back gracefully without failing at configuration time.
+def keystorePath = System.getenv("KEYSTORE_PATH")
+def storePasswordEnv = System.getenv("STORE_PASSWORD")
+def keyAliasEnv = System.getenv("KEY_ALIAS")
+def keyPasswordEnv = System.getenv("KEY_PASSWORD")
+def canSignRelease = keystorePath != null && !keystorePath.trim().isEmpty() &&
+        storePasswordEnv != null && !storePasswordEnv.trim().isEmpty() &&
+        keyAliasEnv != null && !keyAliasEnv.trim().isEmpty() &&
+        keyPasswordEnv != null && !keyPasswordEnv.trim().isEmpty() &&
+        file(keystorePath).exists()
+
+def propVersionCode = project.hasProperty("appVersionCode")
+        ? project.property("appVersionCode").toString().toInteger()
+        : 1
+def propVersionName = project.hasProperty("appVersionName")
+        ? project.property("appVersionName").toString()
+        : '0.3.0'
+
 android {
-    namespace 'ai.storyteller.photocraft'
+    namespace 'IA.photodroid'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'ai.storyteller.photocraft'
+        applicationId 'IA.photodroid'
         // Storage Access Framework and MediaStore Downloads (no storage permissions) need 29.
         minSdk 29
         targetSdk 35
-        versionCode 1
-        versionName '0.3.0'
+        versionCode propVersionCode
+        versionName propVersionName
         // The Rust library is built for arm64 only (see README.md).
         ndk {
             abiFilters 'arm64-v8a'
+        }
+    }
+
+    signingConfigs {
+        if (canSignRelease) {
+            release {
+                storeFile file(keystorePath)
+                storePassword storePasswordEnv
+                keyAlias keyAliasEnv
+                keyPassword keyPasswordEnv
+                enableV1Signing false
+                enableV2Signing true
+                enableV3Signing true
+            }
         }
     }
 
@@ -25,8 +61,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (canSignRelease) {
+                signingConfig signingConfigs.release
+            }
+        }
         release {
             minifyEnabled false
+            if (canSignRelease) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

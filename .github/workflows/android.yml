@@ -2,6 +2,9 @@ name: Android
 
 on:
   push:
+    tags-ignore:
+      - "v*"
+      - "[0-9]*"
   pull_request:
   workflow_dispatch:
 
@@ -65,7 +68,7 @@ jobs:
           fi
 
   apk:
-    name: Build the arm64 debug APK
+    name: Build the arm64 APK
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
@@ -133,7 +136,6 @@ jobs:
       - name: Build libphotocraft_android.so
         shell: bash
         run: |
-          # The step shell exits on the first failing command, so the status is taken directly.
           status=0
           cargo build -p photocraft-android --lib --target aarch64-linux-android --profile android \
             --keep-going --message-format=short > "$RUNNER_TEMP/cargo-build.log" 2>&1 || status=$?
@@ -153,19 +155,65 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build the debug APK
+      - name: Decode signing keystore outside the workspace
+        id: keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/release.jks"
+            if [ ! -s "$RUNNER_TEMP/release.jks" ]; then
+              echo "::error::Decoded keystore is empty. Re-create ANDROID_KEYSTORE_BASE64 with: base64 -w0 keystore.jks"
+              exit 1
+            fi
+            echo "has_keystore=true" >> "$GITHUB_OUTPUT"
+            echo "Keystore decoded ($(stat -c%s "$RUNNER_TEMP/release.jks") bytes)."
+          else
+            echo "has_keystore=false" >> "$GITHUB_OUTPUT"
+            echo "ANDROID_KEYSTORE_BASE64 not available (e.g. fork PR); falling back to debug signing."
+          fi
+
+      - name: Build the APK
+        id: build_apk
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          HAS_KEYSTORE: ${{ steps.keystore.outputs.has_keystore }}
         shell: bash
         run: |
           status=0
-          gradle -p android :app:assembleDebug --no-daemon > "$RUNNER_TEMP/gradle.log" 2>&1 || status=$?
+          if [ "$HAS_KEYSTORE" = "true" ]; then
+            gradle -p android :app:assembleRelease --no-daemon > "$RUNNER_TEMP/gradle.log" 2>&1 || status=$?
+            APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
+          else
+            gradle -p android :app:assembleDebug --no-daemon > "$RUNNER_TEMP/gradle.log" 2>&1 || status=$?
+            APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
+          fi
           cat "$RUNNER_TEMP/gradle.log"
           if [ "$status" -ne 0 ]; then
             bash .github/scripts/report-failure.sh "Gradle build failed" "$RUNNER_TEMP/gradle.log"
             exit "$status"
           fi
+          if [ "$HAS_KEYSTORE" = "true" ]; then
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK_PATH"
+          fi
+          DEST="android/app/build/outputs/apk/PhotoDroid.apk"
+          cp "$APK_PATH" "$DEST"
+          echo "apk_path=$DEST" >> "$GITHUB_OUTPUT"
+
+      - name: Destroy the keystore
+        if: always()
+        shell: bash
+        run: shred -u "$RUNNER_TEMP/release.jks" 2>/dev/null || rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Describe what Gradle built
         if: always()
+        env:
+          APK: ${{ steps.build_apk.outputs.apk_path }}
         shell: bash
         run: |
           out="$RUNNER_TEMP/build-tree.txt"
@@ -173,16 +221,16 @@ jobs:
             echo "java sources:"; find android/app/src/main/java -type f
             echo "class files:"; find android/app/build -name '*.class' 2>/dev/null | head -n 40
             echo "dex files:"; find android/app/build -name '*.dex' -exec ls -l {} + 2>/dev/null
-            echo "apk:"; unzip -l android/app/build/outputs/apk/debug/app-debug.apk 2>/dev/null
-            echo "dex strings:"; unzip -p android/app/build/outputs/apk/debug/app-debug.apk classes.dex 2>/dev/null | strings -n 6 | head -n 25
+            echo "apk:"; unzip -l "$APK" 2>/dev/null
+            echo "dex strings:"; unzip -p "$APK" classes.dex 2>/dev/null | strings -n 6 | head -n 25
           } > "$out" 2>&1 || true
           bash .github/scripts/notice-file.sh "build tree" "$out"
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
-          name: photocraft-android-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: PhotoDroid-apk
+          path: ${{ steps.build_apk.outputs.apk_path }}
           if-no-files-found: error
 
       - name: Commit the Cargo.lock that built
@@ -201,7 +249,7 @@ jobs:
 
       - name: Check the APK's contents
         env:
-          APK: android/app/build/outputs/apk/debug/app-debug.apk
+          APK: ${{ steps.build_apk.outputs.apk_path }}
         run: |
           bash .github/scripts/inspect-apk.sh "$APK" \
             "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" \

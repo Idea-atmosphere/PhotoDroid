@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PhotoDroid</string>
+    <string name="welcome_title">PhotoDroid</string>
+    <string name="welcome_message">این برنامه پورت‌شده‌ی غیررسمیِ پروژه PhotoCraft برای اندروید است.\n\nاین برنامه کاملاً رایگان است و اگر دوست داشتید می‌توانید دونیتم کنید و از این لینک، لینک دونیت از دارامت (برای کاربران داخل ایران) و آدرس کیف پول گذاشته شده:</string>
+    <string name="welcome_donate_card_title">لینک دونیت (دارامت و آدرس کیف پول)</string>
+    <string name="welcome_thanks">از همراهی شما ممنونم.</string>
+    <string name="welcome_close">بستن</string>
+    <string name="welcome_dont_show_again">دیگر نمایش نده</string>
+</resources>

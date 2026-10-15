@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PhotoDroid</string>
+    <string name="welcome_title">PhotoDroid</string>
+    <string name="welcome_message">This app is an unofficial Android port of the PhotoCraft project.\n\nThis app is completely free, and if you\'d like, you can donate to support me. Through this link, both a Daramet donation link (for users in Iran) and wallet addresses are provided:</string>
+    <string name="welcome_donate_card_title">Donate (Daramet &amp; Wallet Address)</string>
+    <string name="welcome_thanks">Thank you for your support.</string>
+    <string name="welcome_close">Close</string>
+    <string name="welcome_dont_show_again">Don\'t show again</string>
 </resources>

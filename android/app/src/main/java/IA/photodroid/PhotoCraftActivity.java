@@ -1,25 +1,40 @@
-package ai.storyteller.photocraft;
+package IA.photodroid;
 
+import android.app.Dialog;
 import android.app.NativeActivity;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.Resources;
 import android.database.Cursor;
+import android.graphics.Color;
 import android.graphics.Insets;
+import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.LocaleList;
 import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.util.DisplayMetrics;
+import android.util.TypedValue;
 import android.view.DisplayCutout;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -29,6 +44,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -54,6 +70,12 @@ public class PhotoCraftActivity extends NativeActivity {
     private static final char SEP = '\u001f';
     private static final int REQUEST_OPEN = 0x5043;
     private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/PhotoCraft";
+    private static final String PREFS_NAME = "photodroid_prefs";
+    private static final String KEY_DONT_SHOW_WELCOME = "dont_show_donate_dialog";
+    private static final String DONATE_URL = "https://idea-atmosphere.github.io/Nothing/designs/minimal.html";
+
+    private static volatile boolean welcomeShownInProcess = false;
+    private Dialog welcomeDialog;
 
     private final ConcurrentLinkedQueue<String> events = new ConcurrentLinkedQueue<>();
     private final ExecutorService io = Executors.newSingleThreadExecutor(runnable -> {
@@ -96,12 +118,279 @@ public class PhotoCraftActivity extends NativeActivity {
         });
         // Picked files that an earlier run didn't get to are stale now.
         deleteTree(new File(getCacheDir(), "open"));
+
+        // Show the welcome & donation popup on startup unless permanently dismissed.
+        window.getDecorView().post(this::maybeShowWelcomePopup);
     }
 
     @Override
     protected void onDestroy() {
+        if (welcomeDialog != null && welcomeDialog.isShowing()) {
+            try {
+                welcomeDialog.dismiss();
+            } catch (RuntimeException ignored) {
+            }
+        }
+        welcomeDialog = null;
         io.shutdownNow();
         super.onDestroy();
+    }
+
+    // ---- Startup welcome & donation popup ----
+
+    private boolean isPersianDeviceLocale() {
+        Locale locale = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            LocaleList sysLocales = Resources.getSystem().getConfiguration().getLocales();
+            if (!sysLocales.isEmpty()) {
+                locale = sysLocales.get(0);
+            }
+        }
+        if (locale == null) {
+            locale = Locale.getDefault();
+        }
+        if (locale == null) {
+            return false;
+        }
+        String lang = locale.getLanguage();
+        return lang != null && lang.toLowerCase(Locale.ROOT).startsWith("fa");
+    }
+
+    private int dp(int value) {
+        return Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                value,
+                getResources().getDisplayMetrics()
+        ));
+    }
+
+    private void maybeShowWelcomePopup() {
+        if (isFinishing() || isDestroyed() || welcomeShownInProcess) {
+            return;
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        if (prefs.getBoolean(KEY_DONT_SHOW_WELCOME, false)) {
+            return;
+        }
+        welcomeShownInProcess = true;
+
+        final boolean isFa = isPersianDeviceLocale();
+        final String titleText = "PhotoDroid";
+        final String bodyText = isFa
+                ? "این برنامه پورت‌شده‌ی غیررسمیِ پروژه PhotoCraft هست برای اندروید.\n\n"
+                  + "این برنامه کاملاً رایگان هست و اگر دوست داشتید می‌تونید دونیتم کنید و از این لینک، لینک دونیت از دارامت (برای کاربران داخل ایران) و آدرس کیف پول گذاشته شده:"
+                : "This app is an unofficial Android port of the PhotoCraft project.\n\n"
+                  + "This app is completely free, and if you'd like, you can donate to support me. Through this link, both a Daramet donation link (for users in Iran) and wallet addresses are provided:";
+        final String linkCardTitle = isFa
+                ? "لینک دونیت (دارامت و آدرس کیف پول)"
+                : "Donate (Daramet & Wallet Address)";
+        final String thanksText = isFa
+                ? "از همراهی شما ممنونم."
+                : "Thank you for your support.";
+        final String closeLabel = isFa ? "بستن" : "Close";
+        final String dontShowLabel = isFa ? "دیگر نمایش نده" : "Don't show again";
+
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setCancelable(true);
+        dialog.setCanceledOnTouchOutside(true);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setLayoutDirection(isFa ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
+        int pad = dp(22);
+        card.setPadding(pad, pad, pad, pad);
+
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setColor(Color.parseColor("#181B22"));
+        cardBg.setCornerRadius(dp(24));
+        cardBg.setStroke(dp(1), Color.parseColor("#2D3342"));
+        card.setBackground(cardBg);
+
+        // Header title
+        TextView titleView = new TextView(this);
+        titleView.setText(titleText);
+        titleView.setTextColor(Color.parseColor("#F3F4F6"));
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        titleView.setGravity(isFa ? Gravity.RIGHT : Gravity.LEFT);
+        card.addView(titleView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        // Scrollable content area for small screens / landscape mode
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1.0f
+        );
+        scrollParams.topMargin = dp(12);
+        scrollParams.bottomMargin = dp(16);
+
+        LinearLayout contentLayout = new LinearLayout(this);
+        contentLayout.setOrientation(LinearLayout.VERTICAL);
+
+        // Main description message
+        TextView bodyView = new TextView(this);
+        bodyView.setText(bodyText);
+        bodyView.setTextColor(Color.parseColor("#D1D5DB"));
+        bodyView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        bodyView.setLineSpacing(dp(4), 1.15f);
+        bodyView.setGravity(isFa ? Gravity.RIGHT : Gravity.LEFT);
+        bodyView.setTextDirection(isFa ? View.TEXT_DIRECTION_RTL : View.TEXT_DIRECTION_LTR);
+        contentLayout.addView(bodyView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        // Clickable Donation Link Box
+        LinearLayout linkBox = new LinearLayout(this);
+        linkBox.setOrientation(LinearLayout.VERTICAL);
+        int boxPadH = dp(16);
+        int boxPadV = dp(14);
+        linkBox.setPadding(boxPadH, boxPadV, boxPadH, boxPadV);
+        GradientDrawable linkBoxBg = new GradientDrawable();
+        linkBoxBg.setColor(Color.parseColor("#222838"));
+        linkBoxBg.setCornerRadius(dp(16));
+        linkBoxBg.setStroke(dp(1), Color.parseColor("#3B6CF6"));
+        linkBox.setBackground(linkBoxBg);
+        linkBox.setClickable(true);
+        linkBox.setFocusable(true);
+        linkBox.setOnClickListener(v -> openUrl(DONATE_URL));
+
+        TextView linkHeader = new TextView(this);
+        linkHeader.setText(linkCardTitle);
+        linkHeader.setTextColor(Color.parseColor("#6B8CFF"));
+        linkHeader.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        linkHeader.setTypeface(Typeface.DEFAULT_BOLD);
+        linkHeader.setGravity(isFa ? Gravity.RIGHT : Gravity.LEFT);
+        linkBox.addView(linkHeader, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        TextView linkUrlView = new TextView(this);
+        linkUrlView.setText(DONATE_URL);
+        linkUrlView.setTextColor(Color.parseColor("#F3F4F6"));
+        linkUrlView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        linkUrlView.setGravity(Gravity.LEFT);
+        linkUrlView.setTextDirection(View.TEXT_DIRECTION_LTR);
+        LinearLayout.LayoutParams urlParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        urlParams.topMargin = dp(4);
+        linkBox.addView(linkUrlView, urlParams);
+
+        LinearLayout.LayoutParams linkBoxParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        linkBoxParams.topMargin = dp(14);
+        linkBoxParams.bottomMargin = dp(14);
+        contentLayout.addView(linkBox, linkBoxParams);
+
+        // Closing thank-you line
+        TextView thanksView = new TextView(this);
+        thanksView.setText(thanksText);
+        thanksView.setTextColor(Color.parseColor("#F3F4F6"));
+        thanksView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        thanksView.setTypeface(Typeface.DEFAULT_BOLD);
+        thanksView.setGravity(isFa ? Gravity.RIGHT : Gravity.LEFT);
+        thanksView.setTextDirection(isFa ? View.TEXT_DIRECTION_RTL : View.TEXT_DIRECTION_LTR);
+        contentLayout.addView(thanksView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        scrollView.addView(contentLayout);
+        card.addView(scrollView, scrollParams);
+
+        // Action buttons row (Close / Don't show again)
+        LinearLayout buttonRow = new LinearLayout(this);
+        buttonRow.setOrientation(LinearLayout.HORIZONTAL);
+        buttonRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView closeBtn = createDialogButton(
+                closeLabel,
+                Color.parseColor("#262B38"),
+                Color.parseColor("#383F52"),
+                Color.parseColor("#E5E7EB")
+        );
+        closeBtn.setOnClickListener(v -> dialog.dismiss());
+
+        TextView dontShowBtn = createDialogButton(
+                dontShowLabel,
+                Color.parseColor("#3B6CF6"),
+                Color.parseColor("#3B6CF6"),
+                Color.parseColor("#FFFFFF")
+        );
+        dontShowBtn.setOnClickListener(v -> {
+            prefs.edit().putBoolean(KEY_DONT_SHOW_WELCOME, true).apply();
+            dialog.dismiss();
+        });
+
+        LinearLayout.LayoutParams btnParams1 = new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1.0f
+        );
+        LinearLayout.LayoutParams btnParams2 = new LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1.0f
+        );
+        if (isFa) {
+            btnParams1.leftMargin = dp(6);
+            btnParams2.rightMargin = dp(6);
+        } else {
+            btnParams1.rightMargin = dp(6);
+            btnParams2.leftMargin = dp(6);
+        }
+        buttonRow.addView(closeBtn, btnParams1);
+        buttonRow.addView(dontShowBtn, btnParams2);
+
+        card.addView(buttonRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        dialog.setContentView(card);
+        Window dlgWindow = dialog.getWindow();
+        if (dlgWindow != null) {
+            dlgWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            int maxWidth = Math.min(dm.widthPixels - dp(36), dp(440));
+            dlgWindow.setLayout(maxWidth, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+
+        welcomeDialog = dialog;
+        try {
+            dialog.show();
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private TextView createDialogButton(String label, int bgColor, int strokeColor, int textColor) {
+        TextView btn = new TextView(this);
+        btn.setText(label);
+        btn.setTextColor(textColor);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        btn.setTypeface(Typeface.DEFAULT_BOLD);
+        btn.setGravity(Gravity.CENTER);
+        int padV = dp(11);
+        int padH = dp(12);
+        btn.setPadding(padH, padV, padH, padV);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(bgColor);
+        bg.setCornerRadius(dp(14));
+        bg.setStroke(dp(1), strokeColor);
+        btn.setBackground(bg);
+        btn.setClickable(true);
+        btn.setFocusable(true);
+        return btn;
     }
 
     /** Called from Rust. Never throws: failures come back as an "err" reply. */
