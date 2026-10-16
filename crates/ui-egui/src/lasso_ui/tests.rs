@@ -153,7 +153,14 @@ fn harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
 fn mouse(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, kind: &str, x: f32, y: f32, mods: Modifiers) {
     let app = h.state();
     let v = &app.ui.views[0];
-    let xf = ViewXform { rect: crate::rulers::content_rect(app, app.last_canvas_rect), zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation };
+    let xf = ViewXform {
+        rect: crate::rulers::content_rect(app, app.last_canvas_rect),
+        zoom: v.zoom,
+        center: v.center,
+        flip: false,
+        rotation: v.rotation,
+        aspect: 1.0,
+    };
     let pos = xf.to_screen(x, y);
     h.event(Event::ModifiersChanged(mods));
     h.event(Event::PointerMoved(pos));
@@ -265,7 +272,14 @@ fn real_canvas_backspace_and_right_click_retract_polygonal_points() {
 
     let state = h.state();
     let view = &state.ui.views[0];
-    let xf = ViewXform { rect: crate::rulers::content_rect(state, state.last_canvas_rect), zoom: view.zoom, center: view.center, flip: false, rotation: 0.0 };
+    let xf = ViewXform {
+        rect: crate::rulers::content_rect(state, state.last_canvas_rect),
+        zoom: view.zoom,
+        center: view.center,
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
     let pos = xf.to_screen(155.0, 100.0);
     h.event(Event::PointerMoved(pos));
     h.event(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::ALT });
@@ -355,4 +369,31 @@ fn on_the_phone_a_tap_off_the_outline_does_not_pull_its_end() {
     let d = app.drag.as_ref().unwrap();
     assert_eq!(d.lasso.as_ref().unwrap().cursor, [120.0, 50.0]);
     assert!(d.points.iter().all(|p| p[1] < 100.0), "nothing was drawn to the bar");
+}
+
+/// ⌘ (Ctrl) with the Lasso is the Move tool for the drag: through the real canvas, a ⌘-drag outside
+/// the selection (here: without one) moves the layer and draws no outline (`canvas::command_moves_layer`).
+#[test]
+fn real_canvas_cmd_drag_outside_the_selection_moves_the_layer() {
+    let mut h = harness();
+    h.state_mut().ui.extras.snap = false;
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    let layer = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut()
+        .session
+        .edit("paint", |doc, _| {
+            doc.layer_mut(layer).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(100, 100, 140, 140), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    h.run_steps(1);
+    mouse(&mut h, "down", 120.0, 120.0, Modifiers::COMMAND);
+    mouse(&mut h, "move", 130.0, 120.0, Modifiers::COMMAND);
+    mouse(&mut h, "move", 150.0, 120.0, Modifiers::COMMAND);
+    mouse(&mut h, "up", 150.0, 120.0, Modifiers::COMMAND);
+    let app = h.state();
+    let alpha = |x, y| app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().rgba(x, y)[3];
+    assert!(app.drag.is_none() && !active(app), "no outline in progress");
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "no selection was made");
+    assert_eq!((alpha(105, 120), alpha(165, 120)), (0.0, 1.0), "the layer moved 30 px to the right");
 }

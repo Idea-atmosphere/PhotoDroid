@@ -574,6 +574,7 @@ fn menu_path_id() -> egui::Id {
 /// What one page of the menu sheet lists: the commands whose menu path is exactly the page's, and the
 /// submenus directly under it.
 struct MenuPage<'a> {
+    #[cfg_attr(not(test), allow(dead_code))]
     commands: Vec<&'a menus::MenuItem>,
     submenus: Vec<String>,
 }

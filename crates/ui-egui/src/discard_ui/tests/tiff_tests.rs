@@ -7,6 +7,7 @@ use std::{cell::RefCell, rc::Rc};
 type Writes = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
 fn tiff_prompt(command: &str) -> (Prompted, Writes, DocId, DocId) {
+    let _gpu = photocraft_testkit::gpu_lock();
     let mut app = app_with_docs(2);
     make_dirty(&mut app, 0);
     let (saved, other) = (doc_id(&app, 0), doc_id(&app, 1));
@@ -143,7 +144,7 @@ fn close_all_waits_for_each_layered_tiff_write() {
     for (i, doc) in [first, second].into_iter().enumerate() {
         h.key_press(Key::Y);
         h.run_steps(3);
-        assert_eq!(h.state().session.documents().len(), 2);
+        assert_eq!(h.state().session.documents().len(), 2 - i, "each saved document closes once written");
         assert_eq!(writes.borrow().len(), i);
         assert_eq!(docs_left(&h), Some(2 - i));
         h.key_press(Key::Enter);

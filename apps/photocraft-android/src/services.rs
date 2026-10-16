@@ -130,7 +130,7 @@ fn file_dialog(link: Link) -> FileDialogFn {
             link.start_picker();
             reply.send(None);
         }
-        FileDialogRequest::Open { multiple: false, .. } => {
+        FileDialogRequest::Open { multiple: false, .. } | FileDialogRequest::Folder { .. } => {
             link.notify(false, "Placing files, scripts, presets and notes isn't available on Android yet. Use File › Open.");
             reply.send(None);
         }
@@ -201,16 +201,7 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
 }
 
 fn export_document(doc: &Document, path: &str, settings: &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String> {
-    let mut opts = photocraft_io::ExportOptions::default();
-    if let Some(q) = settings.jpeg_quality {
-        opts.encode.jpeg_quality = q;
-    }
-    opts.encode.webp_lossless = settings.webp_lossless;
-    if let Some(q) = settings.webp_quality {
-        opts.encode.webp_quality = q;
-    }
-    opts.tiff_layers = settings.tiff_layers;
-    opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+    let opts = settings.io_options();
     crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
 }
 
