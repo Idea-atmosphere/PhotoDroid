@@ -214,8 +214,13 @@ impl eframe::App for AndroidShell {
         self.app.logic(ctx, frame);
         self.frame_work = began.elapsed();
         // Keep frames coming while something is still to arrive: a picker's files, the keyboard's
-        // height while text is being typed, and the first seconds after launch.
-        if self.link.is_picking() || ctx.text_edit_focused() || self.started.elapsed() < SETTLE_TIME {
+        // height while text is being typed, a held finger (so long-press gestures and tool flyouts
+        // fire while a finger rests still), and the first seconds after launch.
+        if self.link.is_picking()
+            || ctx.text_edit_focused()
+            || ctx.input(|i| i.pointer.any_down() || i.any_touches())
+            || self.started.elapsed() < SETTLE_TIME
+        {
             ctx.request_repaint_after(POLL_INTERVAL);
         }
     }
