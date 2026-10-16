@@ -304,6 +304,18 @@ fn toggle_button(ui: &mut egui::Ui, icon: &str, on: bool, tooltip: &str) -> bool
 /// A button that holds several tools shows the one last used, and lists the others on a long press.
 fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let sections = panels::visible_sections(&app.session.prefs().toolbar.hidden);
+    let flyout_id = egui::Id::new("tool-flyout");
+    let held_id = flyout_id.with("held");
+    let pressed_slot_id = flyout_id.with("pressed-slot");
+    if ui.input(|i| i.pointer.any_pressed()) {
+        ui.data_mut(|d| {
+            d.remove::<egui::Id>(held_id);
+            d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id);
+        });
+    } else if ui.input(|i| !i.pointer.primary_down() && !i.pointer.any_released()) {
+        ui.data_mut(|d| d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id));
+    }
     egui::Panel::bottom("phone-tools")
         .exact_size(TOOL_STRIP)
         .frame(Frame::NONE.fill(t.chrome).inner_margin(Margin::symmetric(4, 6)))
@@ -316,51 +328,185 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 .auto_shrink([false, false])
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    // The same slot keys as the desktop toolbar, so both remember the last tool used.
-                    let mut slot_index = 0usize;
-                    for (si, section) in panels::TOOL_SECTIONS.iter().enumerate() {
-                        if si > 0 {
-                            ui.add_space(3.0);
-                            let (rect, _) = ui.allocate_exact_size(vec2(1.0, TOUCH - 8.0), Sense::hover());
-                            ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, t.separator));
-                            ui.add_space(3.0);
-                        }
-                        for slot in section.iter() {
-                            let key = egui::Id::new(("tool-slot", slot_index));
-                            slot_index += 1;
-                            let tool = panels::slot_tool(ui, app.ui.tool, slot, key);
-                            let selected = slot.contains(&app.ui.tool);
-                            let resp = icons::button(ui, icons::tool_icon(tool), TOUCH, selected, tl!(tool.label()));
-                            if slot.len() > 1 {
-                                // A corner mark: this button holds several tools.
-                                let r = resp.rect;
-                                let corner = vec![
-                                    r.right_bottom() + vec2(-2.0, -2.0),
-                                    r.right_bottom() + vec2(-8.0, -2.0),
-                                    r.right_bottom() + vec2(-2.0, -8.0),
-                                ];
-                                ui.painter().add(egui::Shape::convex_polygon(corner, t.text_faint, Stroke::NONE));
+                    ui.horizontal_centered(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        // The same slot keys as the desktop toolbar, so both remember the last tool used.
+                        for (si, section) in sections.iter().enumerate() {
+                            if si > 0 {
+                                ui.add_space(3.0);
+                                let (rect, _) = ui.allocate_exact_size(vec2(1.0, TOUCH - 8.0), Sense::hover());
+                                ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, t.separator));
+                                ui.add_space(3.0);
                             }
-                            if resp.clicked() {
-                                app.ui.tool = tool;
-                            }
-                            if slot.len() > 1 {
-                                egui::Popup::context_menu(&resp).show(|ui| {
-                                    ui.set_min_width(200.0);
-                                    for &item in slot.iter() {
-                                        if ui.add(egui::Button::selectable(item == tool, tl!(item.label()))).clicked() {
-                                            app.ui.tool = item;
-                                            ui.close();
-                                        }
-                                    }
+                            for (slot_index, slot) in section.iter() {
+                                let key = egui::Id::new(("tool-slot", *slot_index));
+                                let tool = panels::slot_tool(ui, app.ui.tool, slot, key);
+                                let selected = slot.contains(&app.ui.tool);
+                                // Suppress hover tooltips on the phone strip so holding a tool button opens its flyout
+                                // without a competing tooltip popup.
+                                let resp = icons::button_with_icon_size_tip(
+                                    ui,
+                                    icons::tool_icon(tool),
+                                    TOUCH,
+                                    (TOUCH * 0.52).round(),
+                                    selected,
+                                    tl!(tool.label()),
+                                    false,
+                                );
+                                if slot.len() > 1 {
+                                    // A corner mark: this button holds several tools.
+                                    let r = resp.rect;
+                                    let corner = vec![
+                                        r.right_bottom() + vec2(-2.0, -2.0),
+                                        r.right_bottom() + vec2(-8.0, -2.0),
+                                        r.right_bottom() + vec2(-2.0, -8.0),
+                                    ];
+                                    ui.painter().add(egui::Shape::convex_polygon(corner, t.text_faint, Stroke::NONE));
+                                }
+                                if ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| resp.rect.contains(p)))
+                                    && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+                                {
+                                    ui.data_mut(|d| d.insert_temp(pressed_slot_id, (key, origin)));
+                                }
+                                let open_here = ui.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(flyout_id)).is_some_and(|(k, _)| k == key);
+                                let pressed_slot = ui.data(|d| d.get_temp::<(egui::Id, egui::Pos2)>(pressed_slot_id));
+                                let latest_pos = ui.input(|i| i.pointer.latest_pos());
+                                let still_on_slot = pressed_slot.is_some_and(|(k, origin)| {
+                                    k == key
+                                        && latest_pos
+                                            .or(Some(origin))
+                                            .is_some_and(|pos| open_here || (resp.rect.expand(6.0).contains(pos) && (pos.x - origin.x).abs() <= 18.0))
                                 });
+                                if !still_on_slot && pressed_slot.is_some_and(|(k, _)| k == key) {
+                                    ui.data_mut(|d| d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id));
+                                }
+                                let down_here = resp.is_pointer_button_down_on() || (still_on_slot && ui.input(|i| i.pointer.primary_down()));
+                                let held_for = down_here.then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
+                                if slot.len() > 1
+                                    && let Some(seconds) = held_for
+                                    && seconds < 0.35
+                                {
+                                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
+                                }
+                                let long_press = held_for.is_some_and(|seconds| seconds >= 0.35) || resp.long_touched();
+                                let held_key = ui.data(|d| d.get_temp::<egui::Id>(held_id));
+                                let released_here =
+                                    still_on_slot && ui.input(|i| i.pointer.any_released() && i.pointer.interact_pos().is_some_and(|p| resp.rect.expand(6.0).contains(p)));
+                                let tapped = (resp.clicked() || released_here) && held_key != Some(key);
+                                let reclicked = open_here && (resp.secondary_clicked() || tapped);
+                                if reclicked {
+                                    ui.data_mut(|d| d.remove::<(egui::Id, egui::Rect)>(flyout_id));
+                                } else if !open_here && slot.len() > 1 && (resp.secondary_clicked() || long_press) {
+                                    ui.data_mut(|d| {
+                                        d.insert_temp(flyout_id, (key, resp.rect));
+                                        if long_press {
+                                            d.insert_temp(held_id, key);
+                                        }
+                                    });
+                                    crate::tool_memory::select(app, tool);
+                                    ui.ctx().request_repaint();
+                                } else if !open_here && tapped {
+                                    crate::tool_memory::select(app, tool);
+                                }
+                                if ui.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(flyout_id)).is_some_and(|(k, _)| k == key) && slot.len() > 1 {
+                                    let label_w = slot
+                                        .iter()
+                                        .map(|it| {
+                                            ui.painter()
+                                                .layout_no_wrap(tl!(it.label()).to_string(), egui::FontId::proportional(14.0), t.text)
+                                                .size()
+                                                .x
+                                        })
+                                        .fold(0.0f32, f32::max);
+                                    let fw = (label_w + 56.0).max(210.0);
+                                    let screen = ui.ctx().content_rect();
+                                    let min_x = screen.left() + 6.0;
+                                    let max_x = (screen.right() - fw - 6.0).max(min_x);
+                                    let x = if crate::direction::is_rtl() {
+                                        (resp.rect.right() - fw).clamp(min_x, max_x)
+                                    } else {
+                                        resp.rect.left().clamp(min_x, max_x)
+                                    };
+                                    let pos = egui::pos2(x, resp.rect.top() - 6.0);
+                                    let area = egui::Area::new(key.with("flyout"))
+                                        .order(egui::Order::Foreground)
+                                        .pivot(egui::Align2::LEFT_BOTTOM)
+                                        .fixed_pos(pos)
+                                        .show(ui.ctx(), |ui| {
+                                            Frame::popup(ui.style()).show(ui, |ui| {
+                                                ui.spacing_mut().item_spacing.y = 2.0;
+                                                for &item in slot.iter() {
+                                                    let (r, ir) = ui.allocate_exact_size(vec2(fw, 40.0), Sense::click());
+                                                    ir.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, item == tool, tl!(item.label())));
+                                                    let pointer_over_row =
+                                                        ui.input(|i| i.pointer.primary_down() && i.pointer.interact_pos().is_some_and(|p| r.contains(p)));
+                                                    if pointer_over_row {
+                                                        ui.ctx().request_repaint();
+                                                    }
+                                                    if item == tool {
+                                                        ui.painter().rect_filled(r, t.radius_sm, t.accent_soft);
+                                                        ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.accent_border), egui::StrokeKind::Inside);
+                                                    } else if ir.hovered() || pointer_over_row {
+                                                        ui.painter().rect_filled(r, t.radius_sm, t.hover);
+                                                    }
+                                                    let fg = if item == tool { t.accent_text } else { t.text };
+                                                    let icon_tint = if item == tool { t.accent_text } else { t.icon };
+                                                    if item == tool {
+                                                        ui.painter().rect_filled(
+                                                            egui::Rect::from_center_size(egui::pos2(r.left() + 10.0, r.center().y), vec2(5.0, 5.0)),
+                                                            1.0,
+                                                            fg,
+                                                        );
+                                                    }
+                                                    icons::paint(
+                                                        ui,
+                                                        egui::Rect::from_center_size(egui::pos2(r.left() + 28.0, r.center().y), vec2(20.0, 20.0)),
+                                                        icons::tool_icon(item),
+                                                        16.0,
+                                                        icon_tint,
+                                                    );
+                                                    ui.painter().text(
+                                                        egui::pos2(r.left() + 46.0, r.center().y),
+                                                        egui::Align2::LEFT_CENTER,
+                                                        tl!(item.label()),
+                                                        egui::FontId::proportional(14.0),
+                                                        fg,
+                                                    );
+                                                    let held_here = ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
+                                                    let released_on_row = ui.input(|i| {
+                                                        i.pointer.any_released()
+                                                            && i.pointer.interact_pos().is_some_and(|p| r.contains(p))
+                                                            && (i.pointer.press_origin().is_some_and(|p| r.contains(p)) || held_here)
+                                                    });
+                                                    if ir.clicked() || released_on_row {
+                                                        crate::tool_memory::select(app, item);
+                                                        ui.data_mut(|d| {
+                                                            d.remove::<(egui::Id, egui::Rect)>(flyout_id);
+                                                            d.remove::<egui::Id>(held_id);
+                                                            d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id);
+                                                        });
+                                                    }
+                                                }
+                                            });
+                                        });
+                                    let pressed_outside = ui.input(|i| {
+                                        i.pointer.any_pressed()
+                                            && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !resp.rect.contains(p))
+                                    });
+                                    if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                        ui.data_mut(|d| d.remove::<(egui::Id, egui::Rect)>(flyout_id));
+                                    }
+                                }
                             }
                         }
-                    }
+                        if ui.input(|i| i.pointer.any_released()) {
+                            ui.data_mut(|d| {
+                                d.remove::<egui::Id>(held_id);
+                                d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id);
+                            });
+                        }
+                    });
                 });
-            });
         });
 }
 
@@ -1005,5 +1151,56 @@ mod tests {
         frame(&ctx, true, egui::RawInput::default(), |ui| widths.push(window_width(ui.ctx(), 120.0) == 120.0));
         frame(&ctx, false, egui::RawInput::default(), |ui| widths.push(window_width(ui.ctx(), 100_000.0) == 100_000.0));
         assert_eq!(widths, [true, true, true]);
+    }
+
+    #[test]
+    fn long_press_tool_button_opens_flyout_and_picks_subtool() {
+        use crate::state::Tool;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.phone_layout = true;
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        let step = |app: &mut PhotocraftApp, time: f64, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                time: Some(time),
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(411.0, 891.0))),
+                ..Default::default()
+            };
+            frame(&ctx, true, input, |ui| tool_strip(app, ui));
+        };
+        step(&mut app, 0.0, vec![]);
+        step(&mut app, 0.1, vec![]);
+        let index = panels::TOOL_SECTIONS.iter().flat_map(|s| s.iter()).position(|slot| slot.contains(&Tool::Lasso)).unwrap();
+        let mut buttons: Vec<egui::Rect> = ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, w)| w.iter())
+                .filter(|w| w.rect.size() == Vec2::splat(TOUCH) && w.sense.senses_click())
+                .map(|w| w.rect)
+                .collect()
+        });
+        buttons.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        let at = buttons[index].center();
+        let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        // Press and hold the Lasso slot (with slight thumb drift inside the button), then lift.
+        step(&mut app, 1.0, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        step(&mut app, 1.2, vec![egui::Event::PointerMoved(at + vec2(8.0, 0.0))]);
+        step(&mut app, 1.38, vec![]);
+        let key = egui::Id::new(("tool-slot", index));
+        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout"))).map(|(id, _)| id), Some(key));
+        // Lifting the finger at the end of the long press keeps the flyout open.
+        step(&mut app, 1.45, vec![pointer(at + vec2(8.0, 0.0), false)]);
+        step(&mut app, 1.5, vec![]);
+        assert_eq!(app.ui.tool, Tool::Lasso);
+        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout"))).map(|(id, _)| id), Some(key));
+        // Tap the 3rd row (Magnetic Lasso Tool) in the flyout.
+        let menu = ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
+        let magnetic_row = egui::pos2(menu.center().x, menu.bottom() - 24.0);
+        step(&mut app, 2.0, vec![egui::Event::PointerMoved(magnetic_row), pointer(magnetic_row, true)]);
+        step(&mut app, 2.05, vec![pointer(magnetic_row, false)]);
+        assert_eq!(app.ui.tool, Tool::MagneticLasso);
+        assert!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout"))).is_none());
     }
 }
