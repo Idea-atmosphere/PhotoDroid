@@ -369,16 +369,15 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     ui.data_mut(|d| d.insert_temp(pressed_slot_id, (key, origin)));
                                 }
                                 let open_here = ui.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(flyout_id)).is_some_and(|(k, _)| k == key);
-                                let still_on_slot = ui.data(|d| d.get_temp::<(egui::Id, egui::Pos2)>(pressed_slot_id)).is_some_and(|(k, origin)| {
+                                let pressed_slot = ui.data(|d| d.get_temp::<(egui::Id, egui::Pos2)>(pressed_slot_id));
+                                let latest_pos = ui.input(|i| i.pointer.latest_pos());
+                                let still_on_slot = pressed_slot.is_some_and(|(k, origin)| {
                                     k == key
-                                        && ui.input(|i| {
-                                            i.pointer
-                                                .latest_pos()
-                                                .or(Some(origin))
-                                                .is_some_and(|pos| open_here || (resp.rect.expand(6.0).contains(pos) && (pos.x - origin.x).abs() <= 18.0))
-                                        })
+                                        && latest_pos
+                                            .or(Some(origin))
+                                            .is_some_and(|pos| open_here || (resp.rect.expand(6.0).contains(pos) && (pos.x - origin.x).abs() <= 18.0))
                                 });
-                                if !still_on_slot && ui.data(|d| d.get_temp::<(egui::Id, egui::Pos2)>(pressed_slot_id)).is_some_and(|(k, _)| k == key) {
+                                if !still_on_slot && pressed_slot.is_some_and(|(k, _)| k == key) {
                                     ui.data_mut(|d| d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id));
                                 }
                                 let down_here = resp.is_pointer_button_down_on() || (still_on_slot && ui.input(|i| i.pointer.primary_down()));
@@ -473,11 +472,11 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                                         egui::FontId::proportional(14.0),
                                                         fg,
                                                     );
+                                                    let held_here = ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
                                                     let released_on_row = ui.input(|i| {
                                                         i.pointer.any_released()
                                                             && i.pointer.interact_pos().is_some_and(|p| r.contains(p))
-                                                            && (i.pointer.press_origin().is_some_and(|p| r.contains(p))
-                                                                || ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key))
+                                                            && (i.pointer.press_origin().is_some_and(|p| r.contains(p)) || held_here)
                                                     });
                                                     if ir.clicked() || released_on_row {
                                                         crate::tool_memory::select(app, item);
