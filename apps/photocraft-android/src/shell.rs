@@ -4,7 +4,6 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use eframe::App as _;
 use photocraft_doc::diag;
 use photocraft_engine::Session;
 use photocraft_ui_egui::theme::ThemeKind;
@@ -26,6 +25,8 @@ const SETTLE_TIME: Duration = Duration::from_secs(3);
 pub fn run(app: AndroidApp) {
     android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("PhotoCraft"));
     crate::crash_guard::install_hook(record_panic);
+    // The system font scan can take seconds: run it off the UI thread.
+    photocraft_ui_egui::type_tool::warm_fonts();
     let Some(root) = app.internal_data_path() else {
         log::error!("PhotoCraft has no app-private storage, so it can't start");
         return;
