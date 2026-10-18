@@ -352,8 +352,10 @@ pub fn run<T: Send + 'static>(
         // no way to get it back, so the error is reported instead.
         let spawned = std::thread::Builder::new().name(format!("photocraft-job-{}", id.0)).spawn(move || {
             let _authorization = AuthorizationScope::enter(authorization);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&wctx).map(|t| Box::new(t) as Payload)))
-                .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                photocraft_doc::cpu::install(|| work(&wctx).map(|t| Box::new(t) as Payload))
+            }))
+            .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))));
             // The receiver is gone when the job was cancelled: nothing to report.
             let _ = tx.send(r);
         });

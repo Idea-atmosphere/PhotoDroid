@@ -203,7 +203,9 @@ fn spawn(
     let spawned = std::thread::Builder::new().name("canvas-redraw".into()).spawn(move || {
         let (blocks, stop, ctx) = work;
         // A panic stops the redraw: the receiver sees the worker gone and drops it.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx)));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            photocraft_doc::cpu::install(|| draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx));
+        }));
         ctx.request_repaint();
     });
     if let Err(e) = spawned {

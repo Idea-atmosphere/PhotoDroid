@@ -181,7 +181,7 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
     };
     let band_len = w * tile as usize;
     #[cfg(not(target_arch = "wasm32"))]
-    {
+    photocraft_doc::cpu::install(|| {
         use rayon::prelude::*;
         let bands = rect.height().div_ceil(tile as u32) as usize;
         if bands >= 2 * rayon::current_num_threads() {
@@ -202,7 +202,7 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
                 }
             }
         }
-    }
+    });
     #[cfg(target_arch = "wasm32")]
     for (i, band) in out.px.chunks_mut(band_len).enumerate() {
         let y0 = rect.y0 + i as i32 * tile;

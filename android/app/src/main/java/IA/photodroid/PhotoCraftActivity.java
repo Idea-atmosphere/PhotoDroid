@@ -408,6 +408,8 @@ public class PhotoCraftActivity extends NativeActivity {
                     return ok(insetTop + "," + insetBottom + "," + insetLeft + "," + insetRight);
                 case "save":
                     return ok(save(argument));
+                case "delete_logs":
+                    return ok(deleteLogs(argument));
                 case "url":
                     return openUrl(argument);
                 case "keyboard":
@@ -582,6 +584,50 @@ public class PhotoCraftActivity extends NativeActivity {
             // The file is saved, under MediaStore's numbered name.
         }
         return row.toString();
+    }
+
+    /**
+     * Removes any saved diagnostic log (.txt) files from Downloads/PhotoCraft when Debug is turned off.
+     */
+    private String deleteLogs(String argument) {
+        ContentResolver resolver = getContentResolver();
+        if (argument != null && !argument.isEmpty()) {
+            String[] uris = argument.split(String.valueOf(SEP), -1);
+            for (String uri : uris) {
+                if (uri != null && !uri.isEmpty()) {
+                    try {
+                        resolver.delete(Uri.parse(uri), null, null);
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
+        }
+        try {
+            resolver.delete(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    MediaStore.Downloads.DISPLAY_NAME + " LIKE ?",
+                    new String[] {"photocraft-log%"}
+            );
+        } catch (RuntimeException ignored) {
+        }
+        try {
+            File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (downloads != null) {
+                File folder = new File(downloads, "PhotoCraft");
+                File[] children = folder.listFiles();
+                if (children != null) {
+                    for (File child : children) {
+                        String n = child.getName();
+                        if (n != null && n.startsWith("photocraft-log") && n.endsWith(".txt")) {
+                            //noinspection ResultOfMethodCallIgnored
+                            child.delete();
+                        }
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return "";
     }
 
     // ---- Links ----

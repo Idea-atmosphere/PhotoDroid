@@ -531,6 +531,11 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// Called when the user toggles the diagnostic `.txt` log on or off in the phone menu.
+    /// When `false`, the platform removes any saved diagnostic `.txt` log files.
+    pub set_debug_log: Option<Box<dyn FnMut(bool) -> Result<(), String>>>,
+    /// Called when the user changes the active CPU core count in the phone menu.
+    pub set_cpu_cores: Option<Box<dyn FnMut(usize) -> Result<(), String>>>,
 }
 
 /// A document histogram being computed off the UI thread: (document, revision, receiver of
@@ -832,8 +837,10 @@ pub struct PhotocraftApp {
 
 impl PhotocraftApp {
     pub fn new(session: Session, services: Services) -> Self {
-        // The phone build keeps the diagnostic log (Help › Save Diagnostic Log); the desktop app keeps none.
-        photocraft_doc::diag::set_enabled(cfg!(target_os = "android"));
+        // The diagnostic log starts off by default and is toggled from the phone menu's Debug section.
+        if !cfg!(target_os = "android") {
+            photocraft_doc::diag::set_enabled(false);
+        }
         let mut app = Self {
             session,
             ui: UiState::default(),

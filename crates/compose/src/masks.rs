@@ -263,7 +263,7 @@ fn blur_rows(v: &mut [f32], w: usize, pass: BoxPass) {
     let threads = if cfg!(target_arch = "wasm32") || v.len() < 1 << 16 {
         1
     } else {
-        std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 16).min(h.max(1))
+        photocraft_doc::cpu::active_cores().clamp(1, 16).min(h.max(1))
     };
     if threads == 1 {
         blur_rows_chunk(v, w, pass);

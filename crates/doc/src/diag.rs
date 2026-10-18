@@ -150,6 +150,8 @@ pub fn clear() {
     if let Some(map) = keys.as_mut() {
         map.clear();
     }
+    DIRTY.store(false, Ordering::Relaxed);
+    TEXT_EDIT.store(false, Ordering::Relaxed);
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ pub mod advanced;
 pub mod analysis;
 pub mod blend_if;
 pub mod comps;
+pub mod cpu;
 pub mod diag;
 pub mod effects;
 pub mod mode;

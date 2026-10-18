@@ -679,6 +679,9 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         }
                     }
                 }
+                if path.is_empty() {
+                    menu_footer_controls(app, ui);
+                }
             } else {
                 let hits = menus::search_items(&items, needle, lang);
                 if hits.is_empty() {
@@ -903,6 +906,115 @@ fn menu_params(id: &str) -> serde_json::Value {
     } else {
         json!({})
     }
+}
+
+/// Footer section at the bottom of the top-level hamburger menu:
+/// 1) Debug toggle (starts saving `photocraft-log.txt` when on, deletes `.txt` log files when off).
+/// 2) Active CPU core selector (`1..=max_cores`).
+fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(4.0);
+    let sep = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), Sense::hover()).0;
+    ui.painter().line_segment([sep.left_center(), sep.right_center()], Stroke::new(2.0, t.separator));
+    ui.add_space(4.0);
+
+    // 1) Debug (.txt log) toggle row.
+    let debug_on = photocraft_doc::diag::enabled();
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, debug_on, "Debug"));
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
+    }
+    let detail = if debug_on {
+        "Saving .txt logs in Downloads/PhotoCraft"
+    } else {
+        "Off — .txt log files removed"
+    };
+    let x = rect.left() + 14.0;
+    ui.painter().text(egui::pos2(x, rect.top() + 17.0), egui::Align2::LEFT_CENTER, "Debug", theme::medium(14.0), t.text);
+    ui.painter().text(egui::pos2(x, rect.top() + 37.0), egui::Align2::LEFT_CENTER, detail, egui::FontId::proportional(11.5), t.text_faint);
+    let badge = egui::Rect::from_center_size(egui::pos2(rect.right() - 38.0, rect.center().y), vec2(52.0, 26.0));
+    let (bg, border, fg, state_text) = if debug_on {
+        (t.accent_soft, t.accent_border, t.accent_text, "ON")
+    } else {
+        (t.panel, t.border, t.text_dim, "OFF")
+    };
+    ui.painter().rect_filled(badge, t.radius_sm, bg);
+    ui.painter().rect_stroke(badge, t.radius_sm, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    ui.painter().text(badge.center(), egui::Align2::CENTER_CENTER, state_text, theme::semibold(12.0), fg);
+    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
+    if resp.clicked() {
+        menus::set_diagnostic_debug(app, !debug_on);
+    }
+
+    // 2) Active CPU core count row and quick-select pills.
+    let max_cores = photocraft_doc::cpu::max_cores();
+    let active_cores = photocraft_doc::cpu::active_cores();
+    let (cpu_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW), Sense::hover());
+    let cores_detail = format!("{active_cores} / {max_cores} active cores");
+    ui.painter().text(egui::pos2(cpu_rect.left() + 14.0, cpu_rect.top() + 17.0), egui::Align2::LEFT_CENTER, "CPU Cores", theme::medium(14.0), t.text);
+    ui.painter().text(
+        egui::pos2(cpu_rect.left() + 14.0, cpu_rect.top() + 37.0),
+        egui::Align2::LEFT_CENTER,
+        &cores_detail,
+        egui::FontId::proportional(11.5),
+        t.text_faint,
+    );
+    let can_dec = active_cores > 1;
+    let can_inc = active_cores < max_cores;
+    let dec_rect = egui::Rect::from_center_size(egui::pos2(cpu_rect.right() - 102.0, cpu_rect.center().y), vec2(34.0, 34.0));
+    let count_center = egui::pos2(cpu_rect.right() - 62.0, cpu_rect.center().y);
+    let inc_rect = egui::Rect::from_center_size(egui::pos2(cpu_rect.right() - 24.0, cpu_rect.center().y), vec2(34.0, 34.0));
+
+    let dec_resp = ui.interact(dec_rect, ui.id().with("cpu-dec"), Sense::click());
+    dec_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_dec, "Decrease CPU cores"));
+    ui.painter().rect_filled(dec_rect, t.radius_sm, if can_dec && dec_resp.hovered() { t.hover } else { t.panel });
+    ui.painter().rect_stroke(dec_rect, t.radius_sm, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    ui.painter().text(dec_rect.center(), egui::Align2::CENTER_CENTER, "−", theme::semibold(16.0), if can_dec { t.text } else { t.text_faint });
+    if can_dec && dec_resp.clicked() {
+        menus::set_active_cpu_cores(app, active_cores - 1);
+    }
+
+    ui.painter().text(count_center, egui::Align2::CENTER_CENTER, format!("{active_cores}"), theme::semibold(14.0), t.text);
+
+    let inc_resp = ui.interact(inc_rect, ui.id().with("cpu-inc"), Sense::click());
+    inc_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_inc, "Increase CPU cores"));
+    ui.painter().rect_filled(inc_rect, t.radius_sm, if can_inc && inc_resp.hovered() { t.hover } else { t.panel });
+    ui.painter().rect_stroke(inc_rect, t.radius_sm, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    ui.painter().text(inc_rect.center(), egui::Align2::CENTER_CENTER, "+", theme::semibold(16.0), if can_inc { t.text } else { t.text_faint });
+    if can_inc && inc_resp.clicked() {
+        menus::set_active_cpu_cores(app, active_cores + 1);
+    }
+
+    if max_cores > 1 {
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            ui.add_space(10.0);
+            for core in 1..=max_cores {
+                let selected = core == active_cores;
+                let (pill_rect, pill_resp) = ui.allocate_exact_size(vec2(34.0, 30.0), Sense::click());
+                let label = format!("CPU {core}");
+                pill_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &label));
+                let (pbg, pborder, pfg) = if selected {
+                    (t.accent_soft, t.accent_border, t.accent_text)
+                } else if pill_resp.hovered() {
+                    (t.hover, t.border, t.text)
+                } else {
+                    (t.panel, t.border, t.text_dim)
+                };
+                ui.painter().rect_filled(pill_rect, t.radius_sm, pbg);
+                ui.painter().rect_stroke(pill_rect, t.radius_sm, Stroke::new(1.0, pborder), egui::StrokeKind::Inside);
+                ui.painter().text(pill_rect.center(), egui::Align2::CENTER_CENTER, format!("{core}"), theme::medium(13.0), pfg);
+                if pill_resp.clicked() {
+                    menus::set_active_cpu_cores(app, core);
+                }
+            }
+        });
+        ui.add_space(6.0);
+    }
+    let bottom = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover()).0;
+    ui.painter().line_segment([bottom.left_center(), bottom.right_center()], Stroke::new(1.0, t.separator));
 }
 
 
@@ -1202,5 +1314,71 @@ mod tests {
         step(&mut app, 2.05, vec![pointer(magnetic_row, false)]);
         assert_eq!(app.ui.tool, Tool::MagneticLasso);
         assert!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout"))).is_none());
+    }
+
+    #[test]
+    fn the_menu_footer_toggles_debug_logs_and_sets_cpu_cores() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        photocraft_doc::diag::set_enabled(false);
+        photocraft_doc::diag::clear();
+        photocraft_doc::cpu::reset_active_cores();
+
+        let saved_files = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let saved_sink = saved_files.clone();
+        let debug_states = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
+        let debug_sink = debug_states.clone();
+        let cpu_states = std::rc::Rc::new(std::cell::RefCell::new(Vec::<usize>::new()));
+        let cpu_sink = cpu_states.clone();
+
+        let svc = crate::Services {
+            write: Some(Box::new(move |name: &str, _bytes: &[u8]| {
+                saved_sink.borrow_mut().push(name.to_string());
+                Ok(())
+            })),
+            set_debug_log: Some(Box::new(move |on: bool| {
+                debug_sink.borrow_mut().push(on);
+                if !on {
+                    saved_files.borrow_mut().clear();
+                }
+                Ok(())
+            })),
+            set_cpu_cores: Some(Box::new(move |cores: usize| {
+                cpu_sink.borrow_mut().push(cores);
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), svc);
+        let mut h = Harness::builder()
+            .with_size(vec2(411.0, 500.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) {
+                    menu_footer_controls(app, ui);
+                }
+            }, app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+
+        assert!(!photocraft_doc::diag::enabled(), "debug starts off");
+        h.get_by_label("Debug").click();
+        h.run_steps(2);
+        assert!(photocraft_doc::diag::enabled(), "tapping Debug turns diagnostic logging on");
+        assert_eq!(*debug_states.borrow(), vec![true]);
+
+        h.get_by_label("Debug").click();
+        h.run_steps(2);
+        assert!(!photocraft_doc::diag::enabled(), "tapping Debug again turns diagnostic logging off");
+        assert_eq!(*debug_states.borrow(), vec![true, false]);
+
+        if photocraft_doc::cpu::max_cores() > 1 {
+            h.get_by_label("CPU 1").click();
+            h.run_steps(2);
+            assert_eq!(photocraft_doc::cpu::active_cores(), 1);
+            h.get_by_label("Increase CPU cores").click();
+            h.run_steps(2);
+            assert_eq!(photocraft_doc::cpu::active_cores(), 2);
+            assert_eq!(*cpu_states.borrow(), vec![1, 2]);
+        }
+        photocraft_doc::cpu::reset_active_cores();
     }
 }
