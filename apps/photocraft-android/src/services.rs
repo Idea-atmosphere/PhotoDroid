@@ -172,10 +172,6 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
             crate::crash_report::save_cpu_cores(&cpu_root, cores);
             Ok(())
         })),
-        check_update: Some(Box::new(|| {
-            let reply = platform::call("check_update", "manual")?;
-            protocol::parse_reply(&reply).map(|_| ())
-        })),
         encode_png: Some(Box::new(encode_png)),
         open_url: Some(Box::new(open_url)),
         // The activity makes the request explicit (see `softKeyboard` there); a failed request

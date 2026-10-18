@@ -2223,16 +2223,6 @@ pub(crate) fn set_active_cpu_cores(app: &mut PhotocraftApp, cores: usize) {
     app.ui.status = format!("Active CPU cores: {applied}/{}", photocraft_doc::cpu::max_cores());
 }
 
-/// Triggers an update & changelog check from the phone menu.
-pub(crate) fn check_for_updates(app: &mut PhotocraftApp) {
-    if let Some(cb) = app.services.check_update.as_mut() {
-        match cb() {
-            Ok(()) => app.ui.status = "Checking for updates…".into(),
-            Err(e) => log::warn!("could not check for updates: {e}"),
-        }
-    }
-}
-
 #[cfg(test)]
 mod diagnostic_log_tests {
     use super::*;
