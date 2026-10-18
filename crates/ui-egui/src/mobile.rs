@@ -1015,6 +1015,26 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let bottom = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover()).0;
     ui.painter().line_segment([bottom.left_center(), bottom.right_center()], Stroke::new(1.0, t.separator));
+
+    // 3) Check for Updates & Changelog row.
+    let (up_rect, up_resp) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW), Sense::click());
+    up_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Check for Updates"));
+    if up_resp.hovered() {
+        ui.painter().rect_filled(up_rect, t.radius_sm, t.hover);
+    }
+    let up_detail = format!("v{} — Check new release & changelog", env!("CARGO_PKG_VERSION"));
+    let ux = up_rect.left() + 14.0;
+    ui.painter().text(egui::pos2(ux, up_rect.top() + 17.0), egui::Align2::LEFT_CENTER, "Check for Updates", theme::medium(14.0), t.text);
+    ui.painter().text(egui::pos2(ux, up_rect.top() + 37.0), egui::Align2::LEFT_CENTER, &up_detail, egui::FontId::proportional(11.5), t.text_faint);
+    let up_badge = egui::Rect::from_center_size(egui::pos2(up_rect.right() - 42.0, up_rect.center().y), vec2(60.0, 26.0));
+    ui.painter().rect_filled(up_badge, t.radius_sm, t.accent_soft);
+    ui.painter().rect_stroke(up_badge, t.radius_sm, Stroke::new(1.0, t.accent_border), egui::StrokeKind::Inside);
+    ui.painter().text(up_badge.center(), egui::Align2::CENTER_CENTER, "Check", theme::semibold(12.0), t.accent_text);
+    ui.painter().line_segment([up_rect.left_bottom(), up_rect.right_bottom()], Stroke::new(1.0, t.separator));
+    if up_resp.clicked() {
+        set_flag(ui.ctx(), menu_open_id(), false);
+        menus::check_for_updates(app);
+    }
 }
 
 
@@ -1329,6 +1349,8 @@ mod tests {
         let debug_sink = debug_states.clone();
         let cpu_states = std::rc::Rc::new(std::cell::RefCell::new(Vec::<usize>::new()));
         let cpu_sink = cpu_states.clone();
+        let update_checks = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let update_sink = update_checks.clone();
 
         let svc = crate::Services {
             write: Some(Box::new(move |name: &str, _bytes: &[u8]| {
@@ -1344,6 +1366,10 @@ mod tests {
             })),
             set_cpu_cores: Some(Box::new(move |cores: usize| {
                 cpu_sink.borrow_mut().push(cores);
+                Ok(())
+            })),
+            check_update: Some(Box::new(move || {
+                update_sink.set(update_sink.get() + 1);
                 Ok(())
             })),
             ..Default::default()
@@ -1379,6 +1405,10 @@ mod tests {
             assert_eq!(photocraft_doc::cpu::active_cores(), 2);
             assert_eq!(*cpu_states.borrow(), vec![1, 2]);
         }
+
+        h.get_by_label("Check for Updates").click();
+        h.run_steps(2);
+        assert_eq!(update_checks.get(), 1);
         photocraft_doc::cpu::reset_active_cores();
     }
 }

@@ -19,10 +19,10 @@ def canSignRelease = keystorePath != null && !keystorePath.trim().isEmpty() &&
 
 def propVersionCode = project.hasProperty("appVersionCode")
         ? project.property("appVersionCode").toString().toInteger()
-        : 1
+        : 900
 def propVersionName = project.hasProperty("appVersionName")
         ? project.property("appVersionName").toString()
-        : '0.3.0'
+        : '0.9.0'
 
 android {
     namespace 'IA.photodroid'
