@@ -7,7 +7,6 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageInfo;
 import android.content.res.Resources;
 import android.database.Cursor;
 import android.graphics.Color;
@@ -37,20 +36,12 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -81,17 +72,10 @@ public class PhotoCraftActivity extends NativeActivity {
     private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/PhotoCraft";
     private static final String PREFS_NAME = "photodroid_prefs";
     private static final String KEY_DONT_SHOW_WELCOME = "dont_show_donate_dialog";
-    private static final String KEY_SKIPPED_UPDATE_TAG = "skipped_update_tag";
-    private static final String KEY_LAST_SEEN_VERSION = "last_seen_version";
     private static final String DONATE_URL = "https://idea-atmosphere.github.io/Nothing/designs/minimal.html";
-    private static final String GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/Idea-atmosphere/PhotoDroid/releases/latest";
-    private static final String GITHUB_RELEASES_LIST_API = "https://api.github.com/repos/Idea-atmosphere/PhotoDroid/releases?per_page=1";
-    private static final String GITHUB_RELEASES_PAGE = "https://github.com/Idea-atmosphere/PhotoDroid/releases";
 
     private static volatile boolean welcomeShownInProcess = false;
-    private static volatile boolean autoUpdateCheckedInProcess = false;
     private Dialog welcomeDialog;
-    private Dialog updateDialog;
 
     private final ConcurrentLinkedQueue<String> events = new ConcurrentLinkedQueue<>();
     private final ExecutorService io = Executors.newSingleThreadExecutor(runnable -> {
@@ -135,15 +119,8 @@ public class PhotoCraftActivity extends NativeActivity {
         // Picked files that an earlier run didn't get to are stale now.
         deleteTree(new File(getCacheDir(), "open"));
 
-        // Show the welcome & donation popup on startup unless permanently dismissed,
-        // and check for updates / announce new version changes.
-        window.getDecorView().post(() -> {
-            maybeShowWelcomePopup();
-            if (!autoUpdateCheckedInProcess) {
-                autoUpdateCheckedInProcess = true;
-                checkUpdateAsync(false);
-            }
-        });
+        // Show the welcome & donation popup on startup unless permanently dismissed.
+        window.getDecorView().post(this::maybeShowWelcomePopup);
     }
 
     @Override
@@ -155,13 +132,6 @@ public class PhotoCraftActivity extends NativeActivity {
             }
         }
         welcomeDialog = null;
-        if (updateDialog != null && updateDialog.isShowing()) {
-            try {
-                updateDialog.dismiss();
-            } catch (RuntimeException ignored) {
-            }
-        }
-        updateDialog = null;
         io.shutdownNow();
         super.onDestroy();
     }
@@ -423,453 +393,6 @@ public class PhotoCraftActivity extends NativeActivity {
         return btn;
     }
 
-    // ---- Update checker & Changelog popup ----
-
-    private String currentAppVersion() {
-        try {
-            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-            if (info != null && info.versionName != null && !info.versionName.trim().isEmpty()) {
-                return cleanVersion(info.versionName);
-            }
-        } catch (Exception ignored) {
-        }
-        return "0.9.0";
-    }
-
-    private static String cleanVersion(String raw) {
-        if (raw == null) {
-            return "0.0.0";
-        }
-        String s = raw.trim();
-        while (s.startsWith("v") || s.startsWith("V")) {
-            s = s.substring(1).trim();
-        }
-        return s.isEmpty() ? "0.0.0" : s;
-    }
-
-    /**
-     * Compares two semantic version strings (e.g. "0.9.1" vs "0.9.0").
-     * Returns > 0 if a > b, < 0 if a < b, 0 if equal.
-     */
-    private static int compareVersions(String a, String b) {
-        String[] pa = cleanVersion(a).split("[^0-9]+");
-        String[] pb = cleanVersion(b).split("[^0-9]+");
-        int len = Math.max(pa.length, pb.length);
-        for (int i = 0; i < len; i++) {
-            int va = 0;
-            int vb = 0;
-            if (i < pa.length && !pa[i].isEmpty()) {
-                try {
-                    va = Integer.parseInt(pa[i]);
-                } catch (NumberFormatException ignored) {
-                }
-            }
-            if (i < pb.length && !pb[i].isEmpty()) {
-                try {
-                    vb = Integer.parseInt(pb[i]);
-                } catch (NumberFormatException ignored) {
-                }
-            }
-            if (va != vb) {
-                return Integer.compare(va, vb);
-            }
-        }
-        return 0;
-    }
-
-    private static String currentVersionChangelog(boolean isFa) {
-        if (isFa) {
-            return "• همگام‌سازی کامل با هسته و امکانات جدید PhotoCraft v0.9.0\n"
-                 + "• رفع مشکل نگه داشتن طولانی (Long-press) دکمه‌های نوار ابزار پایین برای باز شدن زیرمجموعهٔ ابزارها (مثل Lasso، Polygonal Lasso و Magnetic Lasso)\n"
-                 + "• افزودن بخش دیباگ (Debug) در انتهای منوی همبرگری برای شروع ذخیرهٔ خودکار فایل‌های لاگ .txt هنگام روشن بودن و حذف کامل آن‌ها هنگام خاموش کردن\n"
-                 + "• افزودن بخش انتخاب تعداد هسته‌های فعال پردازنده (CPU Cores) در انتهای منوی همبرگری\n"
-                 + "• افزودن سیستم بررسی خودکار و دستی آپدیت جدید به همراه نمایش لیست تغییرات";
-        }
-        return "• Full sync with upstream PhotoCraft v0.9.0 engine & UI features\n"
-             + "• Fixed long-pressing bottom toolbar buttons to open sub-tool flyout menus (e.g. Lasso, Polygonal Lasso, Magnetic Lasso)\n"
-             + "• Added Debug toggle at the bottom of the hamburger menu to start saving .txt logs when enabled and delete them when disabled\n"
-             + "• Added Active CPU Cores selector at the bottom of the hamburger menu\n"
-             + "• Added automatic & manual Update Checker with release changelog display";
-    }
-
-    private static final class ReleaseInfo {
-        final String tag;
-        final String name;
-        final String body;
-        final String downloadUrl;
-
-        ReleaseInfo(String tag, String name, String body, String downloadUrl) {
-            this.tag = tag;
-            this.name = name;
-            this.body = body;
-            this.downloadUrl = downloadUrl;
-        }
-    }
-
-    private static ReleaseInfo fetchJsonRelease(String apiUrl) {
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL(apiUrl);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(7000);
-            conn.setReadTimeout(7000);
-            conn.setRequestProperty("Accept", "application/vnd.github+json");
-            conn.setRequestProperty("User-Agent", "PhotoDroid-UpdateChecker");
-            int code = conn.getResponseCode();
-            if (code < 200 || code >= 300) {
-                return null;
-            }
-            StringBuilder sb = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    sb.append(line).append('\n');
-                }
-            }
-            String raw = sb.toString().trim();
-            JSONObject obj;
-            if (raw.startsWith("[")) {
-                JSONArray arr = new JSONArray(raw);
-                if (arr.length() == 0) {
-                    return null;
-                }
-                obj = arr.getJSONObject(0);
-            } else {
-                obj = new JSONObject(raw);
-            }
-            String tag = obj.optString("tag_name", "").trim();
-            if (tag.isEmpty()) {
-                return null;
-            }
-            String name = obj.optString("name", tag).trim();
-            String body = obj.optString("body", "").trim();
-            String htmlUrl = obj.optString("html_url", GITHUB_RELEASES_PAGE).trim();
-            String apkUrl = "";
-            JSONArray assets = obj.optJSONArray("assets");
-            if (assets != null) {
-                for (int i = 0; i < assets.length(); i++) {
-                    JSONObject asset = assets.optJSONObject(i);
-                    if (asset != null) {
-                        String assetName = asset.optString("name", "");
-                        String dl = asset.optString("browser_download_url", "");
-                        if (assetName.endsWith(".apk") && !dl.isEmpty()) {
-                            apkUrl = dl;
-                            break;
-                        }
-                    }
-                }
-            }
-            String targetUrl = !apkUrl.isEmpty() ? apkUrl : (htmlUrl.isEmpty() ? GITHUB_RELEASES_PAGE : htmlUrl);
-            return new ReleaseInfo(tag, name, body, targetUrl);
-        } catch (Exception ignored) {
-            return null;
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
-        }
-    }
-
-    private static ReleaseInfo fetchLatestRelease() {
-        ReleaseInfo latest = fetchJsonRelease(GITHUB_LATEST_RELEASE_API);
-        if (latest != null) {
-            return latest;
-        }
-        return fetchJsonRelease(GITHUB_RELEASES_LIST_API);
-    }
-
-    private void checkUpdateAsync(final boolean manual) {
-        final String currentVer = currentAppVersion();
-        final SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        final String lastSeenVer = prefs.getString(KEY_LAST_SEEN_VERSION, "");
-        final String skippedTag = prefs.getString(KEY_SKIPPED_UPDATE_TAG, "");
-
-        Thread worker = new Thread(() -> {
-            final ReleaseInfo info = fetchLatestRelease();
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) {
-                    return;
-                }
-                boolean hasNewerRemote = info != null && compareVersions(info.tag, currentVer) > 0;
-                if (hasNewerRemote) {
-                    if (!manual && cleanVersion(info.tag).equals(cleanVersion(skippedTag))) {
-                        return;
-                    }
-                    prefs.edit().putString(KEY_LAST_SEEN_VERSION, currentVer).apply();
-                    showUpdateDialog(
-                            true,
-                            currentVer,
-                            cleanVersion(info.tag),
-                            info.name,
-                            info.body,
-                            info.downloadUrl,
-                            manual
-                    );
-                } else if (manual) {
-                    prefs.edit().putString(KEY_LAST_SEEN_VERSION, currentVer).apply();
-                    String notes = (info != null && !info.body.isEmpty()) ? info.body : "";
-                    String dl = (info != null && !info.downloadUrl.isEmpty()) ? info.downloadUrl : GITHUB_RELEASES_PAGE;
-                    showUpdateDialog(
-                            false,
-                            currentVer,
-                            currentVer,
-                            "PhotoDroid v" + currentVer,
-                            notes,
-                            dl,
-                            true
-                    );
-                } else if (!currentVer.equals(lastSeenVer)) {
-                    // First launch after installing or updating to this version: announce the new version & its changes.
-                    prefs.edit().putString(KEY_LAST_SEEN_VERSION, currentVer).apply();
-                    String notes = (info != null && !info.body.isEmpty() && compareVersions(info.tag, currentVer) == 0)
-                            ? info.body
-                            : "";
-                    showUpdateDialog(
-                            false,
-                            currentVer,
-                            currentVer,
-                            "PhotoDroid v" + currentVer,
-                            notes,
-                            GITHUB_RELEASES_PAGE,
-                            false
-                    );
-                }
-            });
-        }, "photodroid-update-check");
-        worker.setDaemon(true);
-        worker.start();
-    }
-
-    private void showUpdateDialog(
-            final boolean updateAvailable,
-            final String currentVer,
-            final String targetVer,
-            final String releaseTitle,
-            final String remoteNotes,
-            final String downloadUrl,
-            final boolean manual
-    ) {
-        if (isFinishing() || isDestroyed()) {
-            return;
-        }
-        if (updateDialog != null && updateDialog.isShowing()) {
-            try {
-                updateDialog.dismiss();
-            } catch (RuntimeException ignored) {
-            }
-        }
-
-        final boolean isFa = isPersianDeviceLocale();
-        final SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-
-        final String headerText;
-        final String versionSubtitle;
-        if (updateAvailable) {
-            headerText = isFa ? "آپدیت جدید PhotoDroid منتشر شد! 🎉" : "New PhotoDroid Update Available! 🎉";
-            versionSubtitle = isFa
-                    ? ("نسخه فعلی: v" + currentVer + "  ←  نسخه جدید: v" + targetVer)
-                    : ("Current: v" + currentVer + "  →  New: v" + targetVer);
-        } else if (manual) {
-            headerText = isFa ? "برنامه به‌روز است (نسخه v" + currentVer + ")" : "You're Up to Date (v" + currentVer + ")";
-            versionSubtitle = isFa
-                    ? "شما در حال استفاده از آخرین نسخهٔ منتشرشده هستید."
-                    : "You are running the latest version of PhotoDroid.";
-        } else {
-            headerText = isFa ? "به نسخهٔ جدید PhotoDroid v" + currentVer + " خوش آمدید!" : "What's New in PhotoDroid v" + currentVer;
-            versionSubtitle = isFa
-                    ? "نسخهٔ جدید با موفقیت نصب شد. خلاصه تغییرات این آپدیت:"
-                    : "Updated successfully. Here is what changed in this version:";
-        }
-
-        final String changelogHeader = isFa ? "تغییرات و ویژگی‌های نسخه:" : "Changelog & What's New:";
-        final String builtInNotes = currentVersionChangelog(isFa);
-        final String combinedNotes;
-        if (remoteNotes != null && !remoteNotes.trim().isEmpty()) {
-            combinedNotes = updateAvailable
-                    ? remoteNotes.trim()
-                    : (builtInNotes + "\n\n— GitHub Release Notes —\n" + remoteNotes.trim());
-        } else {
-            combinedNotes = builtInNotes;
-        }
-
-        Dialog dialog = new Dialog(this);
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-        dialog.setCancelable(true);
-        dialog.setCanceledOnTouchOutside(true);
-
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setLayoutDirection(isFa ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
-        int pad = dp(22);
-        card.setPadding(pad, pad, pad, pad);
-
-        GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(Color.parseColor("#181B22"));
-        cardBg.setCornerRadius(dp(24));
-        cardBg.setStroke(dp(1), Color.parseColor(updateAvailable ? "#3B6CF6" : "#2D3342"));
-        card.setBackground(cardBg);
-
-        TextView titleView = new TextView(this);
-        titleView.setText(headerText);
-        titleView.setTextColor(Color.parseColor("#F3F4F6"));
-        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        titleView.setTypeface(Typeface.DEFAULT_BOLD);
-        titleView.setGravity(isFa ? Gravity.RIGHT : Gravity.LEFT);
-        card.addView(titleView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-
-        TextView subView = new TextView(this);
-        subView.setText(versionSubtitle);
-        subView.setTextColor(Color.parseColor("#6B8CFF"));
-        subView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        subView.setTypeface(Typeface.DEFAULT_BOLD);
-        subView.setGravity(isFa ? Gravity.RIGHT : Gravity.LEFT);
-        LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        subParams.topMargin = dp(6);
-        card.addView(subView, subParams);
-
-        ScrollView scrollView = new ScrollView(this);
-        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1.0f
-        );
-        scrollParams.topMargin = dp(12);
-        scrollParams.bottomMargin = dp(16);
-
-        LinearLayout notesBox = new LinearLayout(this);
-        notesBox.setOrientation(LinearLayout.VERTICAL);
-        int boxPad = dp(14);
-        notesBox.setPadding(boxPad, boxPad, boxPad, boxPad);
-        GradientDrawable notesBg = new GradientDrawable();
-        notesBg.setColor(Color.parseColor("#222838"));
-        notesBg.setCornerRadius(dp(16));
-        notesBg.setStroke(dp(1), Color.parseColor("#2E364A"));
-        notesBox.setBackground(notesBg);
-
-        TextView notesTitle = new TextView(this);
-        notesTitle.setText(changelogHeader + (releaseTitle != null && !releaseTitle.isEmpty() ? " (" + releaseTitle + ")" : ""));
-        notesTitle.setTextColor(Color.parseColor("#F3F4F6"));
-        notesTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        notesTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        notesTitle.setGravity(isFa ? Gravity.RIGHT : Gravity.LEFT);
-        notesBox.addView(notesTitle, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-
-        TextView notesBody = new TextView(this);
-        notesBody.setText(combinedNotes);
-        notesBody.setTextColor(Color.parseColor("#D1D5DB"));
-        notesBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        notesBody.setLineSpacing(dp(4), 1.15f);
-        notesBody.setGravity(isFa ? Gravity.RIGHT : Gravity.LEFT);
-        notesBody.setTextDirection(isFa ? View.TEXT_DIRECTION_RTL : View.TEXT_DIRECTION_LTR);
-        LinearLayout.LayoutParams bodyParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        bodyParams.topMargin = dp(8);
-        notesBox.addView(notesBody, bodyParams);
-
-        scrollView.addView(notesBox);
-        card.addView(scrollView, scrollParams);
-
-        LinearLayout buttonRow = new LinearLayout(this);
-        buttonRow.setOrientation(LinearLayout.HORIZONTAL);
-        buttonRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        final String closeLabel = updateAvailable
-                ? (isFa ? "بعداً" : "Later")
-                : (isFa ? "بستن" : "Close");
-        final String primaryLabel = updateAvailable
-                ? (isFa ? "دریافت آپدیت (APK)" : "Download Update")
-                : (isFa ? "صفحه نسخه‌ها در گیت‌هاب" : "GitHub Releases");
-
-        TextView secondaryBtn = createDialogButton(
-                closeLabel,
-                Color.parseColor("#262B38"),
-                Color.parseColor("#383F52"),
-                Color.parseColor("#E5E7EB")
-        );
-        secondaryBtn.setOnClickListener(v -> dialog.dismiss());
-
-        TextView primaryBtn = createDialogButton(
-                primaryLabel,
-                Color.parseColor("#3B6CF6"),
-                Color.parseColor("#3B6CF6"),
-                Color.parseColor("#FFFFFF")
-        );
-        primaryBtn.setOnClickListener(v -> {
-            openUrl(downloadUrl != null && !downloadUrl.isEmpty() ? downloadUrl : GITHUB_RELEASES_PAGE);
-            dialog.dismiss();
-        });
-
-        LinearLayout.LayoutParams btnParams1 = new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1.0f
-        );
-        LinearLayout.LayoutParams btnParams2 = new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1.0f
-        );
-        if (isFa) {
-            btnParams1.leftMargin = dp(6);
-            btnParams2.rightMargin = dp(6);
-        } else {
-            btnParams1.rightMargin = dp(6);
-            btnParams2.leftMargin = dp(6);
-        }
-        buttonRow.addView(secondaryBtn, btnParams1);
-        buttonRow.addView(primaryBtn, btnParams2);
-
-        card.addView(buttonRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-
-        if (updateAvailable && !manual) {
-            TextView skipBtn = new TextView(this);
-            skipBtn.setText(isFa ? "نادیده گرفتن این نسخه" : "Skip this version");
-            skipBtn.setTextColor(Color.parseColor("#9CA3AF"));
-            skipBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-            skipBtn.setGravity(Gravity.CENTER);
-            skipBtn.setPadding(dp(8), dp(10), dp(8), dp(2));
-            skipBtn.setOnClickListener(v -> {
-                prefs.edit().putString(KEY_SKIPPED_UPDATE_TAG, targetVer).apply();
-                dialog.dismiss();
-            });
-            card.addView(skipBtn, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-            ));
-        }
-
-        dialog.setContentView(card);
-        Window dlgWindow = dialog.getWindow();
-        if (dlgWindow != null) {
-            dlgWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            DisplayMetrics dm = getResources().getDisplayMetrics();
-            int maxWidth = Math.min(dm.widthPixels - dp(36), dp(440));
-            dlgWindow.setLayout(maxWidth, ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
-
-        updateDialog = dialog;
-        try {
-            dialog.show();
-        } catch (RuntimeException ignored) {
-        }
-    }
-
     /** Called from Rust. Never throws: failures come back as an "err" reply. */
     public String photocraftCall(String command, String argument) {
         try {
@@ -887,9 +410,6 @@ public class PhotoCraftActivity extends NativeActivity {
                     return ok(save(argument));
                 case "delete_logs":
                     return ok(deleteLogs(argument));
-                case "check_update":
-                    checkUpdateAsync(true);
-                    return ok("");
                 case "url":
                     return openUrl(argument);
                 case "keyboard":

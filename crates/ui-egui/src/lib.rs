@@ -536,8 +536,6 @@ pub struct Services {
     pub set_debug_log: Option<Box<dyn FnMut(bool) -> Result<(), String>>>,
     /// Called when the user changes the active CPU core count in the phone menu.
     pub set_cpu_cores: Option<Box<dyn FnMut(usize) -> Result<(), String>>>,
-    /// Called when the user taps "Check for Updates" in the phone menu.
-    pub check_update: Option<Box<dyn FnMut() -> Result<(), String>>>,
 }
 
 /// A document histogram being computed off the UI thread: (document, revision, receiver of
