@@ -143,6 +143,8 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
     let (autosave_store, results_store, discard_store, adopt_store) = (store.clone(), store.clone(), store.clone(), store);
     let recovery_dir = dirs.recovery();
     let saver = Rc::new(Saver::new(dirs.staging(), dirs.export_index()));
+    let saver_for_debug = saver.clone();
+    let (debug_root, cpu_root) = (dirs.root().to_path_buf(), dirs.root().to_path_buf());
     let (prefs_load, prefs_save) = (dirs.preferences(), dirs.preferences());
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
@@ -154,10 +156,21 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
         file_dialog: Some(file_dialog(link.clone())),
         write: Some(Box::new(move |path: &str, bytes: &[u8]| {
             // The diagnostic log keeps a copy in app-private storage too, for a crash (see `crash_report`).
-            if path == crate::crash_report::LOG_NAME {
+            if path == crate::crash_report::LOG_NAME && photocraft_doc::diag::enabled() {
                 crate::crash_report::keep_copy(bytes);
             }
             saver.save(path, bytes)
+        })),
+        set_debug_log: Some(Box::new(move |enabled: bool| {
+            crate::crash_report::set_debug_enabled(&debug_root, enabled);
+            if !enabled {
+                saver_for_debug.remove_logs()?;
+            }
+            Ok(())
+        })),
+        set_cpu_cores: Some(Box::new(move |cores: usize| {
+            crate::crash_report::save_cpu_cores(&cpu_root, cores);
+            Ok(())
         })),
         encode_png: Some(Box::new(encode_png)),
         open_url: Some(Box::new(open_url)),
@@ -268,6 +281,33 @@ impl Saver {
         let staged = self.staging.join(format!("{}-{name}", NEXT.fetch_add(1, Ordering::Relaxed)));
         std::fs::write(&staged, bytes).map_err(fail)?;
         Ok(staged)
+    }
+
+    fn remove_logs(&self) -> Result<(), String> {
+        let mut uris = Vec::new();
+        {
+            let mut saved = self.saved.borrow_mut();
+            let log_keys: Vec<String> = saved
+                .keys()
+                .filter(|k| *k == crate::crash_report::LOG_NAME || k.starts_with("photocraft-log-unclean-"))
+                .cloned()
+                .collect();
+            for key in log_keys {
+                if let Some(uri) = saved.remove(&key)
+                    && !uri.is_empty()
+                {
+                    uris.push(uri);
+                }
+            }
+            let index = protocol::format_index(&saved);
+            if let Err(e) = write_atomic(&self.index, index.as_bytes()) {
+                log::warn!("could not update export index after removing logs: {e}");
+            }
+        }
+        let refs: Vec<&str> = uris.iter().map(String::as_str).collect();
+        let argument = protocol::join_fields(&refs);
+        let reply = platform::call("delete_logs", &argument)?;
+        protocol::parse_reply(&reply).map(|_| ())
     }
 }
 

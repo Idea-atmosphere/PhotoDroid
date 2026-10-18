@@ -62,14 +62,34 @@ pub fn run(app: AndroidApp) {
             if let Some(render_state) = cc.wgpu_render_state.clone() {
                 photo.set_wgpu(render_state);
             }
-            diag::note(|| format!("PhotoCraft {} started", env!("CARGO_PKG_VERSION")));
-            // A run that did not end normally left its log (see `crash_report`): save it to Downloads now.
-            if let Some((name, bytes)) = crash_report::begin(dirs.root()) {
-                let saved = photo.services.write.as_mut().map(|write| write(name.as_str(), bytes.as_slice()));
-                match saved {
-                    Some(Ok(())) => diag::note(|| format!("the last run did not end normally: its log is saved as {name}")),
-                    Some(Err(e)) => log::warn!("PhotoCraft: the last run's log could not be saved: {e}"),
-                    None => {}
+            if let Some(saved_cores) = crash_report::load_cpu_cores(dirs.root()) {
+                photocraft_doc::cpu::set_active_cores(saved_cores);
+            }
+            let debug_on = crash_report::debug_enabled(dirs.root());
+            diag::set_enabled(debug_on);
+            if debug_on {
+                diag::note(|| {
+                    format!(
+                        "PhotoCraft {} started (active CPU cores: {}/{})",
+                        env!("CARGO_PKG_VERSION"),
+                        photocraft_doc::cpu::active_cores(),
+                        photocraft_doc::cpu::max_cores()
+                    )
+                });
+                // A run that did not end normally left its log (see `crash_report`): save it to Downloads now.
+                if let Some((name, bytes)) = crash_report::begin(dirs.root()) {
+                    let saved = photo.services.write.as_mut().map(|write| write(name.as_str(), bytes.as_slice()));
+                    match saved {
+                        Some(Ok(())) => diag::note(|| format!("the last run did not end normally: its log is saved as {name}")),
+                        Some(Err(e)) => log::warn!("PhotoCraft: the last run's log could not be saved: {e}"),
+                        None => {}
+                    }
+                }
+            } else {
+                diag::clear();
+                crash_report::set_debug_enabled(dirs.root(), false);
+                if let Some(cb) = photo.services.set_debug_log.as_mut() {
+                    let _ = cb(false);
                 }
             }
             Ok(Box::new(AndroidShell { app: photo, link, started: Instant::now(), frames: FrameLog::default(), frame_started: None, frame_work: Duration::ZERO, root: shell_root }))
@@ -83,6 +103,9 @@ pub fn run(app: AndroidApp) {
 /// The panic hook's record (see `crash_guard`): the panic goes into the diagnostic log, and the log's copy in
 /// app-private storage is kept, so the panic is in the file even if the app does not get to save it.
 fn record_panic(message: &str) {
+    if !diag::enabled() {
+        return;
+    }
     if let Some(text) = diag::record_panic(message) {
         crash_report::keep_copy(text.as_bytes());
     }

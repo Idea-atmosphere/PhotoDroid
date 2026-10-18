@@ -2169,6 +2169,60 @@ pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) 
     }
 }
 
+/// Toggles diagnostic `.txt` logging from the phone menu. Turning it on starts recording and immediately
+/// saves `Downloads/PhotoCraft/photocraft-log.txt`; turning it off stops recording, clears the in-memory log,
+/// and asks the platform service to remove any saved diagnostic `.txt` files.
+pub(crate) fn set_diagnostic_debug(app: &mut PhotocraftApp, enabled: bool) {
+    if enabled {
+        photocraft_doc::diag::set_enabled(true);
+        photocraft_doc::diag::note(|| {
+            format!(
+                "PhotoCraft {} diagnostic log enabled (active CPU cores: {}/{})",
+                env!("CARGO_PKG_VERSION"),
+                photocraft_doc::cpu::active_cores(),
+                photocraft_doc::cpu::max_cores()
+            )
+        });
+        if let Some(cb) = app.services.set_debug_log.as_mut()
+            && let Err(e) = cb(true)
+        {
+            log::warn!("could not persist debug log state: {e}");
+        }
+        let _ = photocraft_doc::diag::take_dirty();
+        *LOG_WRITTEN.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+        if app.services.write.is_some() {
+            match write_diagnostic_log(app) {
+                Ok(lines) => {
+                    photocraft_doc::diag::note_quiet(move || format!("log saved: {lines} lines"));
+                    app.ui.status = format!("Diagnostic log saved as {DIAGNOSTIC_LOG}");
+                }
+                Err(e) => log::warn!("the diagnostic log could not be saved: {e}"),
+            }
+        }
+    } else {
+        photocraft_doc::diag::set_enabled(false);
+        photocraft_doc::diag::clear();
+        *LOG_WRITTEN.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        if let Some(cb) = app.services.set_debug_log.as_mut()
+            && let Err(e) = cb(false)
+        {
+            log::warn!("could not remove diagnostic log files: {e}");
+        }
+        app.ui.status = format!("Diagnostic log disabled ({DIAGNOSTIC_LOG} removed)");
+    }
+}
+
+/// Updates the active CPU core count from the phone menu and persists it through the platform service.
+pub(crate) fn set_active_cpu_cores(app: &mut PhotocraftApp, cores: usize) {
+    let applied = photocraft_doc::cpu::set_active_cores(cores);
+    if let Some(cb) = app.services.set_cpu_cores.as_mut()
+        && let Err(e) = cb(applied)
+    {
+        log::warn!("could not persist active CPU core count: {e}");
+    }
+    app.ui.status = format!("Active CPU cores: {applied}/{}", photocraft_doc::cpu::max_cores());
+}
+
 #[cfg(test)]
 mod diagnostic_log_tests {
     use super::*;

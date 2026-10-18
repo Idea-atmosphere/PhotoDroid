@@ -16,6 +16,10 @@ pub const LOG_NAME: &str = "photocraft-log.txt";
 const LAST_COPY: &str = "last-log.txt";
 /// Present while a run is going; a launch that finds it did not see the run end.
 const RUNNING: &str = "running";
+/// Present when the user enabled Debug (`.txt` log saving) in the hamburger menu.
+const DEBUG_ON: &str = "debug-enabled";
+/// Stores the user-selected active CPU core count in app-private storage.
+const CPU_CORES: &str = "cpu-cores.txt";
 
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 
@@ -49,6 +53,33 @@ pub fn begin(root: &Path) -> Option<(String, Vec<u8>)> {
 /// When the app is dropped at the end of a run: clears the running mark.
 pub fn finish(root: &Path) {
     let _ = std::fs::remove_file(root.join(RUNNING));
+}
+
+/// Whether Debug (`.txt` log saving) was turned on by the user.
+pub fn debug_enabled(root: &Path) -> bool {
+    root.join(DEBUG_ON).exists()
+}
+
+/// Persists the Debug toggle in `root`, and clears any saved copies when turned off.
+pub fn set_debug_enabled(root: &Path, enabled: bool) {
+    if enabled {
+        let _ = std::fs::write(root.join(DEBUG_ON), b"1");
+        let _ = std::fs::write(root.join(RUNNING), b"");
+    } else {
+        let _ = std::fs::remove_file(root.join(DEBUG_ON));
+        let _ = std::fs::remove_file(root.join(LAST_COPY));
+        let _ = std::fs::remove_file(root.join(RUNNING));
+    }
+}
+
+/// Reads the persisted active CPU core count from `root`, if previously saved.
+pub fn load_cpu_cores(root: &Path) -> Option<usize> {
+    std::fs::read_to_string(root.join(CPU_CORES)).ok()?.trim().parse::<usize>().ok().filter(|&n| n >= 1)
+}
+
+/// Persists the active CPU core count in `root`.
+pub fn save_cpu_cores(root: &Path, cores: usize) {
+    let _ = std::fs::write(root.join(CPU_CORES), cores.to_string().as_bytes());
 }
 
 /// The name a log from a run that did not end normally is saved as in Downloads.
@@ -107,5 +138,24 @@ mod tests {
     #[test]
     fn the_unclean_name_has_the_time() {
         assert_eq!(unclean_name(1234), "photocraft-log-unclean-1234.txt");
+    }
+
+    #[test]
+    fn debug_toggle_and_cpu_cores_persist_and_clean_up() {
+        let dir = scratch("settings");
+        assert!(!debug_enabled(&dir));
+        set_debug_enabled(&dir, true);
+        keep_copy_in(&dir, b"log");
+        assert!(debug_enabled(&dir));
+        assert!(dir.join(LAST_COPY).exists());
+        set_debug_enabled(&dir, false);
+        assert!(!debug_enabled(&dir));
+        assert!(!dir.join(LAST_COPY).exists());
+        assert!(!dir.join(RUNNING).exists());
+
+        assert_eq!(load_cpu_cores(&dir), None);
+        save_cpu_cores(&dir, 4);
+        assert_eq!(load_cpu_cores(&dir), Some(4));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
