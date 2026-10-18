@@ -937,7 +937,7 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (bg, border, fg, state_text) = if debug_on {
         (t.accent_soft, t.accent_border, t.accent_text, "ON")
     } else {
-        (t.panel, t.border, t.text_dim, "OFF")
+        (t.field, t.field_border, t.text_dim, "OFF")
     };
     ui.painter().rect_filled(badge, t.radius_sm, bg);
     ui.painter().rect_stroke(badge, t.radius_sm, Stroke::new(1.0, border), egui::StrokeKind::Inside);
@@ -968,8 +968,8 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
     let dec_resp = ui.interact(dec_rect, ui.id().with("cpu-dec"), Sense::click());
     dec_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_dec, "Decrease CPU cores"));
-    ui.painter().rect_filled(dec_rect, t.radius_sm, if can_dec && dec_resp.hovered() { t.hover } else { t.panel });
-    ui.painter().rect_stroke(dec_rect, t.radius_sm, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(dec_rect, t.radius_sm, if can_dec && dec_resp.hovered() { t.hover } else { t.field });
+    ui.painter().rect_stroke(dec_rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     ui.painter().text(dec_rect.center(), egui::Align2::CENTER_CENTER, "−", theme::semibold(16.0), if can_dec { t.text } else { t.text_faint });
     if can_dec && dec_resp.clicked() {
         menus::set_active_cpu_cores(app, active_cores - 1);
@@ -979,8 +979,8 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
     let inc_resp = ui.interact(inc_rect, ui.id().with("cpu-inc"), Sense::click());
     inc_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_inc, "Increase CPU cores"));
-    ui.painter().rect_filled(inc_rect, t.radius_sm, if can_inc && inc_resp.hovered() { t.hover } else { t.panel });
-    ui.painter().rect_stroke(inc_rect, t.radius_sm, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(inc_rect, t.radius_sm, if can_inc && inc_resp.hovered() { t.hover } else { t.field });
+    ui.painter().rect_stroke(inc_rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     ui.painter().text(inc_rect.center(), egui::Align2::CENTER_CENTER, "+", theme::semibold(16.0), if can_inc { t.text } else { t.text_faint });
     if can_inc && inc_resp.clicked() {
         menus::set_active_cpu_cores(app, active_cores + 1);
@@ -999,9 +999,9 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let (pbg, pborder, pfg) = if selected {
                     (t.accent_soft, t.accent_border, t.accent_text)
                 } else if pill_resp.hovered() {
-                    (t.hover, t.border, t.text)
+                    (t.hover, t.field_border, t.text)
                 } else {
-                    (t.panel, t.border, t.text_dim)
+                    (t.field, t.field_border, t.text_dim)
                 };
                 ui.painter().rect_filled(pill_rect, t.radius_sm, pbg);
                 ui.painter().rect_stroke(pill_rect, t.radius_sm, Stroke::new(1.0, pborder), egui::StrokeKind::Inside);
