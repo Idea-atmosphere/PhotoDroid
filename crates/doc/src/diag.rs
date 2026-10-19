@@ -11,9 +11,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
 /// Most lines kept; the oldest go first.
-pub const CAPACITY: usize = 4000;
+pub const CAPACITY: usize = 8000;
 /// Slots remembered by [`note_changed`]; the table starts again past this many.
-const SLOTS: usize = 512;
+const SLOTS: usize = 2048;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static TEXT_EDIT: AtomicBool = AtomicBool::new(false);

@@ -70,10 +70,9 @@ pub fn run(app: AndroidApp) {
             if debug_on {
                 diag::note(|| {
                     format!(
-                        "PhotoCraft {} started (active CPU cores: {}/{})",
+                        "PhotoCraft {} started ({})",
                         env!("CARGO_PKG_VERSION"),
-                        photocraft_doc::cpu::active_cores(),
-                        photocraft_doc::cpu::max_cores()
+                        photocraft_doc::cpu::diag_summary()
                     )
                 });
                 // A run that did not end normally left its log (see `crash_report`): save it to Downloads now.
@@ -92,7 +91,17 @@ pub fn run(app: AndroidApp) {
                     let _ = cb(false);
                 }
             }
-            Ok(Box::new(AndroidShell { app: photo, link, started: Instant::now(), frames: FrameLog::default(), frame_started: None, frame_work: Duration::ZERO, root: shell_root }))
+            Ok(Box::new(AndroidShell {
+                app: photo,
+                link,
+                started: Instant::now(),
+                frames: FrameLog::default(),
+                frame_started: None,
+                frame_work: Duration::ZERO,
+                root: shell_root,
+                last_insets_px: [0; 4],
+                last_insets_diag: String::new(),
+            }))
         }),
     );
     if let Err(e) = result {
@@ -123,6 +132,10 @@ struct AndroidShell {
     frame_work: Duration,
     /// App-private storage, where the run's mark is (see `crash_report`).
     root: PathBuf,
+    /// Last known system bar & IME insets in device pixels `[top, bottom, left, right]`.
+    last_insets_px: [i32; 4],
+    /// Last logged diagnostic breakdown from `PhotoCraftActivity` (`insets_diag`).
+    last_insets_diag: String,
 }
 
 impl Drop for AndroidShell {
@@ -213,20 +226,56 @@ fn read_open(file: &mut std::fs::File) -> std::io::Result<Vec<u8>> {
     intake::read_to_bytes(file, size)
 }
 
-/// The system bars and the soft keyboard, in egui points: the parts the UI keeps clear of. `None`
-/// when the activity can't say, and the last known value stays in effect.
-fn system_insets(ctx: &egui::Context) -> Option<egui::SafeAreaInsets> {
-    let reply = platform::call("insets", "").ok()?;
-    let payload = protocol::parse_reply(&reply).ok()?;
-    let [top, bottom, left, right] = protocol::parse_insets(&payload)?;
-    let per_point = ctx.pixels_per_point().max(f32::EPSILON);
-    let points = |pixels: i32| pixels.max(0) as f32 / per_point;
-    Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
-        left: points(left),
-        right: points(right),
-        top: points(top),
-        bottom: points(bottom),
-    }))
+impl AndroidShell {
+    /// The system bars and the soft keyboard, in egui points: the parts the UI keeps clear of.
+    /// Keeps the last known value in effect if a JNI poll ever fails, and records full diagnostic
+    /// details when `.txt` logging is enabled.
+    fn system_insets(&mut self, ctx: &egui::Context, raw_input: &egui::RawInput) -> egui::SafeAreaInsets {
+        let native_ppp = raw_input
+            .viewports
+            .get(&raw_input.viewport_id)
+            .and_then(|v| v.native_pixels_per_point)
+            .or_else(|| ctx.native_pixels_per_point());
+        let per_point = native_ppp
+            .map_or_else(|| ctx.pixels_per_point(), |n| n * ctx.zoom_factor())
+            .max(f32::EPSILON);
+
+        if let Ok(reply) = platform::call("insets", "")
+            && let Ok(payload) = protocol::parse_reply(&reply)
+            && let Some(px) = protocol::parse_insets(&payload)
+        {
+            let changed = px != self.last_insets_px;
+            self.last_insets_px = px;
+            if diag::enabled() && (changed || self.last_insets_diag.is_empty()) {
+                let detail = platform::call("insets_diag", "")
+                    .ok()
+                    .and_then(|r| protocol::parse_reply(&r).ok())
+                    .unwrap_or_default();
+                if changed || detail != self.last_insets_diag {
+                    self.last_insets_diag = detail.clone();
+                    let [top, bottom, left, right] = px;
+                    diag::note(move || {
+                        format!(
+                            "Android insets updated: px=(top={top}, bottom={bottom}, left={left}, right={right}) ppp={per_point:.2} pt=(top={:.1}, bottom={:.1}, left={:.1}, right={:.1}) [{detail}]",
+                            top.max(0) as f32 / per_point,
+                            bottom.max(0) as f32 / per_point,
+                            left.max(0) as f32 / per_point,
+                            right.max(0) as f32 / per_point,
+                        )
+                    });
+                }
+            }
+        }
+
+        let [top, bottom, left, right] = self.last_insets_px;
+        let points = |pixels: i32| pixels.max(0) as f32 / per_point;
+        egui::SafeAreaInsets(egui::epaint::MarginF32 {
+            left: points(left),
+            right: points(right),
+            top: points(top),
+            bottom: points(bottom),
+        })
+    }
 }
 
 impl eframe::App for AndroidShell {
@@ -249,10 +298,9 @@ impl eframe::App for AndroidShell {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let insets = self.system_insets(ctx, raw_input);
+        raw_input.safe_area_insets = Some(insets);
         self.app.raw_input_hook(ctx, raw_input);
-        if let Some(insets) = system_insets(ctx) {
-            raw_input.safe_area_insets = Some(insets);
-        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {

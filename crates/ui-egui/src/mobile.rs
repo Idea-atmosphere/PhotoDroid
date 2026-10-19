@@ -104,6 +104,41 @@ pub fn held_or_double(ctx: &egui::Context, resp: &egui::Response) -> bool {
 
 /// Draw the phone chrome. It goes where the desktop chrome goes, before the canvas.
 pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if photocraft_doc::diag::enabled() {
+        photocraft_doc::cpu::note_governor_state();
+        let vp = ui.ctx().viewport_rect();
+        let cr = ui.ctx().content_rect();
+        let insets = ui.ctx().input(|i| i.safe_area_insets());
+        let ppp = ui.ctx().pixels_per_point();
+        let key = ((vp.width().round() as u64) << 48)
+            ^ ((vp.height().round() as u64) << 32)
+            ^ ((cr.width().round() as u64) << 16)
+            ^ (cr.height().round() as u64)
+            ^ ((insets.bottom.round() as u64) << 8)
+            ^ (insets.top.round() as u64);
+        photocraft_doc::diag::note_changed(0x5549_4348, key, || {
+            format!(
+                "UI chrome layout: viewport=[{:.1},{:.1}..{:.1},{:.1}] ({:.1}x{:.1}) content=[{:.1},{:.1}..{:.1},{:.1}] ({:.1}x{:.1}) safe_insets=(t={:.1},b={:.1},l={:.1},r={:.1}) ppp={ppp:.2} rtl={}",
+                vp.left(),
+                vp.top(),
+                vp.right(),
+                vp.bottom(),
+                vp.width(),
+                vp.height(),
+                cr.left(),
+                cr.top(),
+                cr.right(),
+                cr.bottom(),
+                cr.width(),
+                cr.height(),
+                insets.top,
+                insets.bottom,
+                insets.left,
+                insets.right,
+                crate::direction::is_rtl()
+            )
+        });
+    }
     // Bottom panels stack upwards in the order they are added: the virtual keyboard (when it is on)
     // sits at the foot of the screen, the tool strip above it, the options above that, and the sheet
     // above those. The keys are drawn again above a dialog or the menu, which dim the screen.
@@ -129,6 +164,103 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     menu(app, ui.ctx());
     app.virtual_mouse.overlay(ui.ctx());
+}
+
+/// Sanitizes raw touch and pointer events on the phone before `egui::Context::begin_pass` runs:
+/// 1) `egui-winit` emits `Event::PointerGone` on `TouchPhase::Cancel` without releasing the primary
+///    pointer button (`PointerButton { pressed: false }`), which leaves `primary_down` stuck in `egui`
+///    whenever Android cancels a touch near the navigation bar or screen edge.
+/// 2) When a touch release (`End`/`Cancel`/`PointerButton { pressed: false }`) and a new touch press
+///    (`Start`/`PointerButton { pressed: true }`) arrive in the same frame, ensures `Event::PointerGone`
+///    separates them and logs the event transition when diagnostic logging is enabled.
+pub fn sanitize_touch_events(ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    if raw_input.events.is_empty() {
+        return;
+    }
+    let diag_on = photocraft_doc::diag::enabled();
+    let mods = raw_input.modifiers;
+    let had_primary_down = ctx.input(|i| i.pointer.primary_down());
+    let mut primary_down = had_primary_down;
+    let mut saw_release_this_frame = false;
+    let mut saw_gone_since_release = false;
+    let mut out = Vec::with_capacity(raw_input.events.len() + 4);
+
+    for event in raw_input.events.drain(..) {
+        match event {
+            egui::Event::Touch { device_id, id, phase, pos, force } => {
+                match phase {
+                    egui::TouchPhase::Start => {
+                        if saw_release_this_frame && !saw_gone_since_release {
+                            out.push(egui::Event::PointerGone);
+                            saw_gone_since_release = true;
+                            if diag_on {
+                                photocraft_doc::diag::note(|| {
+                                    format!("touch sanitize: inserted PointerGone before same-frame Touch::Start id={} pos=({:.1},{:.1})", id.0, pos.x, pos.y)
+                                });
+                            }
+                        }
+                        if diag_on {
+                            photocraft_doc::diag::note(|| format!("touch start: id={} pos=({:.1},{:.1})", id.0, pos.x, pos.y));
+                        }
+                        out.push(egui::Event::Touch { device_id, id, phase, pos, force });
+                    }
+                    egui::TouchPhase::Move => {
+                        out.push(egui::Event::Touch { device_id, id, phase, pos, force });
+                    }
+                    egui::TouchPhase::End => {
+                        saw_release_this_frame = true;
+                        saw_gone_since_release = false;
+                        if diag_on {
+                            photocraft_doc::diag::note(|| format!("touch end: id={} pos=({:.1},{:.1})", id.0, pos.x, pos.y));
+                        }
+                        out.push(egui::Event::Touch { device_id, id, phase, pos, force });
+                    }
+                    egui::TouchPhase::Cancel => {
+                        saw_release_this_frame = true;
+                        saw_gone_since_release = false;
+                        if diag_on {
+                            photocraft_doc::diag::note(|| {
+                                format!("touch cancel: id={} pos=({:.1},{:.1}) primary_down={primary_down}", id.0, pos.x, pos.y)
+                            });
+                        }
+                        out.push(egui::Event::Touch { device_id, id, phase, pos, force });
+                        if primary_down {
+                            out.push(egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: false,
+                                modifiers: mods,
+                            });
+                            primary_down = false;
+                        }
+                    }
+                }
+            }
+            egui::Event::PointerButton { pos, button, pressed, modifiers } => {
+                if button == egui::PointerButton::Primary {
+                    if pressed {
+                        if saw_release_this_frame && !saw_gone_since_release {
+                            out.push(egui::Event::PointerGone);
+                            saw_gone_since_release = true;
+                        }
+                        primary_down = true;
+                    } else {
+                        primary_down = false;
+                        saw_release_this_frame = true;
+                        saw_gone_since_release = false;
+                    }
+                }
+                out.push(egui::Event::PointerButton { pos, button, pressed, modifiers });
+            }
+            egui::Event::PointerGone => {
+                saw_gone_since_release = true;
+                out.push(egui::Event::PointerGone);
+            }
+            other => out.push(other),
+        }
+    }
+
+    raw_input.events = out;
 }
 
 // The phone chrome's state lives in egui's memory: none of it is saved with the document.
@@ -300,6 +432,262 @@ fn toggle_button(ui: &mut egui::Ui, icon: &str, on: bool, tooltip: &str) -> bool
     resp.clicked()
 }
 
+/// Horizontal drag threshold (points) before a touch on a bottom strip engages strip scrolling.
+/// Kept at 11 pt so a slight thumb drift (e.g. 8 pt) during a 0.35s press-and-hold still opens a
+/// tool's flyout, while any real horizontal swipe smoothly scrolls the strip.
+const STRIP_SCROLL_SLOP: f32 = 11.0;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StripScrollState {
+    offset_x: f32,
+    max_offset_x: f32,
+    content_width: f32,
+    viewport_width: f32,
+    strip_rect: Option<egui::Rect>,
+    pointer_in_strip: bool,
+    dragging: bool,
+    press_pos: Option<egui::Pos2>,
+    last_pos: Option<egui::Pos2>,
+    press_start_offset_x: f32,
+    max_travel: f32,
+    velocity_x: f32,
+}
+
+fn begin_strip_scroll(
+    ui: &egui::Ui,
+    strip_id: egui::Id,
+    label: &'static str,
+    diag_slot: u64,
+    block_drag: bool,
+) -> StripScrollState {
+    let mut state = ui.data(|d| d.get_temp::<StripScrollState>(strip_id)).unwrap_or_default();
+    let strip_rect = state.strip_rect.unwrap_or_else(|| ui.max_rect()).expand(4.0);
+    let diag_on = photocraft_doc::diag::enabled();
+
+    let (any_down, any_pressed, any_released, press_origin, interact_pos, raw_delta_x, dt, event_touch_pos, same_frame_restart) =
+        ui.input(|i| {
+            let mut last_touch_pos = None;
+            let mut saw_end = false;
+            let mut restart = false;
+            for ev in &i.raw.events {
+                match ev {
+                    egui::Event::Touch { phase, pos, .. } => {
+                        last_touch_pos = Some(*pos);
+                        match phase {
+                            egui::TouchPhase::End | egui::TouchPhase::Cancel => saw_end = true,
+                            egui::TouchPhase::Start if saw_end => restart = true,
+                            _ => {}
+                        }
+                    }
+                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } => {
+                        last_touch_pos = Some(*pos);
+                        if !*pressed {
+                            saw_end = true;
+                        } else if saw_end {
+                            restart = true;
+                        }
+                    }
+                    egui::Event::PointerMoved(pos) => {
+                        last_touch_pos = Some(*pos);
+                    }
+                    _ => {}
+                }
+            }
+            (
+                i.pointer.any_down(),
+                i.pointer.any_pressed(),
+                i.pointer.any_released(),
+                i.pointer.press_origin(),
+                i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()).or(last_touch_pos),
+                i.pointer.delta().x,
+                i.stable_dt.clamp(1.0 / 240.0, 0.1),
+                last_touch_pos,
+                restart,
+            )
+        });
+
+    let origin_changed = match (press_origin, state.press_pos) {
+        (Some(o), Some(prev_o)) => (o - prev_o).length() > 1.5,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    let new_press = any_pressed || same_frame_restart || (any_down && (!state.pointer_in_strip || origin_changed));
+
+    if !any_down || (any_released && !any_pressed && !same_frame_restart) {
+        if state.pointer_in_strip {
+            if diag_on {
+                let off = state.offset_x;
+                let max_off = state.max_offset_x;
+                let travel = state.max_travel;
+                let vel = state.velocity_x;
+                photocraft_doc::diag::note(move || {
+                    format!("{label} scroll touch released: offset_x={off:.1}/{max_off:.1} max_travel={travel:.1} coast_vel={vel:.1}")
+                });
+            }
+            state.pointer_in_strip = false;
+            state.dragging = false;
+            state.press_pos = None;
+            state.last_pos = None;
+        }
+        if state.velocity_x.abs() > 15.0 {
+            let limit = if state.max_offset_x > 0.0 { state.max_offset_x } else { f32::MAX };
+            let prev = state.offset_x;
+            state.offset_x = (state.offset_x + state.velocity_x * dt).clamp(0.0, limit);
+            state.velocity_x *= (-6.5 * dt).exp();
+            if state.offset_x <= 0.0 || (state.max_offset_x > 0.0 && state.offset_x >= state.max_offset_x) || state.velocity_x.abs() <= 15.0 {
+                state.velocity_x = 0.0;
+            }
+            if (state.offset_x - prev).abs() > 0.05 || state.velocity_x.abs() > 15.0 {
+                ui.ctx().request_repaint();
+            }
+        } else {
+            state.velocity_x = 0.0;
+        }
+    } else if new_press {
+        let start_pos = press_origin.or(interact_pos).or(event_touch_pos);
+        if !block_drag && start_pos.is_some_and(|p| strip_rect.contains(p)) {
+            if diag_on && raw_delta_x.abs() > 16.0 {
+                let kept = state.offset_x;
+                photocraft_doc::diag::note(move || {
+                    format!(
+                        "{label} scroll: suppressed air-travel press delta raw_dx={raw_delta_x:.1} at {:?}, keeping offset_x={kept:.1}",
+                        start_pos
+                    )
+                });
+            }
+            state.pointer_in_strip = true;
+            state.dragging = false;
+            state.press_pos = start_pos;
+            state.last_pos = interact_pos.or(start_pos);
+            state.press_start_offset_x = state.offset_x;
+            state.max_travel = 0.0;
+            state.velocity_x = 0.0;
+            if diag_on {
+                let off = state.offset_x;
+                let max_off = state.max_offset_x;
+                photocraft_doc::diag::note(move || {
+                    format!("{label} scroll touch start: pos={start_pos:?} offset_x={off:.1}/{max_off:.1}")
+                });
+            }
+        } else {
+            state.pointer_in_strip = false;
+            state.dragging = false;
+            state.press_pos = None;
+            state.last_pos = None;
+            state.velocity_x = 0.0;
+        }
+    } else if any_down && state.pointer_in_strip {
+        if block_drag {
+            state.dragging = false;
+            state.velocity_x = 0.0;
+        } else if let Some(curr) = interact_pos {
+            let origin = state.press_pos.unwrap_or(curr);
+            let prev = state.last_pos.unwrap_or(curr);
+            let step_dx = curr.x - prev.x;
+            let total_dx = curr.x - origin.x;
+            let travel = (curr - origin).length().max(total_dx.abs());
+            state.max_travel = state.max_travel.max(travel);
+            state.last_pos = Some(curr);
+            let limit = if state.max_offset_x > 0.0 { state.max_offset_x } else { f32::MAX };
+
+            if !state.dragging {
+                if total_dx.abs() > STRIP_SCROLL_SLOP {
+                    state.dragging = true;
+                    let initial_dx = total_dx - STRIP_SCROLL_SLOP * total_dx.signum();
+                    state.offset_x = (state.press_start_offset_x - initial_dx).clamp(0.0, limit);
+                    state.velocity_x = (-initial_dx / dt).clamp(-2400.0, 2400.0) * 0.5;
+                    if diag_on {
+                        let off = state.offset_x;
+                        let max_off = state.max_offset_x;
+                        photocraft_doc::diag::note(move || {
+                            format!("{label} scroll drag engaged: total_dx={total_dx:.1} offset_x={off:.1}/{max_off:.1}")
+                        });
+                    }
+                    ui.ctx().request_repaint();
+                }
+            } else {
+                if step_dx.abs() > 0.0 {
+                    state.offset_x = (state.offset_x - step_dx).clamp(0.0, limit);
+                    let inst_vel = (-step_dx / dt).clamp(-2400.0, 2400.0);
+                    if step_dx.abs() > 0.4 {
+                        if state.velocity_x == 0.0 || inst_vel.signum() == state.velocity_x.signum() || step_dx.abs() > 4.5 {
+                            state.velocity_x = state.velocity_x * 0.4 + inst_vel * 0.6;
+                        } else {
+                            state.velocity_x *= 0.5;
+                            if diag_on {
+                                let kept_vel = state.velocity_x;
+                                photocraft_doc::diag::note(move || {
+                                    format!("{label} scroll: filtered thumb-lift rollback step_dx={step_dx:.2} inst_vel={inst_vel:.1} kept_vel={kept_vel:.1}")
+                                });
+                            }
+                        }
+                    } else {
+                        state.velocity_x *= (-8.0 * dt).exp();
+                    }
+                } else {
+                    state.velocity_x *= (-8.0 * dt).exp();
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+
+    let _ = diag_slot;
+    state
+}
+
+#[allow(clippy::too_many_arguments)]
+fn end_strip_scroll(
+    ui: &egui::Ui,
+    strip_id: egui::Id,
+    label: &'static str,
+    diag_slot: u64,
+    mut state: StripScrollState,
+    inner_rect: egui::Rect,
+    content_size: Vec2,
+    scroll_area_offset_x: f32,
+) {
+    let prev_content_w = state.content_width;
+    state.strip_rect = Some(inner_rect);
+    state.viewport_width = inner_rect.width().max(0.0);
+    state.content_width = content_size.x.max(state.viewport_width);
+    let new_max = (content_size.x - inner_rect.width()).max(0.0);
+    state.max_offset_x = new_max;
+
+    if !state.pointer_in_strip && state.velocity_x.abs() <= 15.0 && (scroll_area_offset_x - state.offset_x).abs() > 0.5 {
+        state.offset_x = scroll_area_offset_x;
+    }
+    state.offset_x = state.offset_x.clamp(0.0, new_max);
+
+    if (state.content_width - prev_content_w).abs() > 1.0 && crate::direction::is_rtl() {
+        ui.ctx().request_repaint();
+    }
+
+    ui.data_mut(|d| d.insert_temp(strip_id, state));
+
+    if photocraft_doc::diag::enabled() {
+        let key = ((state.offset_x.round() as i64 as u64 & 0xffff) << 48)
+            ^ ((new_max.round() as i64 as u64 & 0xffff) << 32)
+            ^ ((content_size.x.round() as i64 as u64 & 0xffff) << 16)
+            ^ (inner_rect.width().round() as i64 as u64 & 0xfffe)
+            ^ u64::from(state.dragging);
+        let off = state.offset_x;
+        let cw = content_size.x;
+        let vw = inner_rect.width();
+        let dragging = state.dragging;
+        let vel = state.velocity_x;
+        photocraft_doc::diag::note_changed(diag_slot, key, move || {
+            format!(
+                "{label} state: offset_x={off:.1}/{new_max:.1} content_w={cw:.1} view_w={vw:.1} rect=[{:.1},{:.1}..{:.1},{:.1}] dragging={dragging} vel={vel:.1}",
+                inner_rect.left(),
+                inner_rect.top(),
+                inner_rect.right(),
+                inner_rect.bottom()
+            )
+        });
+    }
+}
+
 /// The strip of every tool, sideways-scrolling, Photoshop's order with a divider between sections.
 /// A button that holds several tools shows the one last used, and lists the others on a long press.
 fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -316,19 +704,42 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else if ui.input(|i| !i.pointer.primary_down() && !i.pointer.any_released()) {
         ui.data_mut(|d| d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id));
     }
+    let total_slots: usize = sections.iter().map(|s| s.len()).sum();
+    let total_seps = sections.len().saturating_sub(1);
+    let estimated_tools_w = total_slots as f32 * (TOUCH + 2.0) + total_seps as f32 * 9.0 + 8.0;
+
     egui::Panel::bottom("phone-tools")
         .exact_size(TOOL_STRIP)
         .frame(Frame::NONE.fill(t.chrome).inner_margin(Margin::symmetric(4, 6)))
         .show(ui, |ui| {
             let r = ui.max_rect();
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
-            // No scroll bar: on a touch screen it is a second, inverted drag handle under the buttons, which made the
-            // strip catch and jump. A finger drags the strip itself, and it glides on after a flick.
-            egui::ScrollArea::horizontal()
+            let hold_flyout_active = ui.data(|d| d.get_temp::<egui::Id>(held_id)).is_some()
+                && ui.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(flyout_id)).is_some();
+            let strip_scroll_id = egui::Id::new("phone-tools-strip-scroll");
+            let strip_state = begin_strip_scroll(ui, strip_scroll_id, "tool_strip", 0x5453_5452, hold_flyout_active);
+            let strip_dragging = strip_state.dragging;
+            if strip_dragging {
+                ui.data_mut(|d| {
+                    d.remove::<egui::Id>(held_id);
+                    d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id);
+                });
+            }
+            let visible = ui.available_width();
+            let min_row_w = strip_state.content_width.max(visible).max(estimated_tools_w);
+            // Controlled horizontal scroll: StripScrollState tracks finger drags directly so multi-swipe
+            // right-to-left scrolling never bounces back on air-travel deltas or thumb-lift jitter.
+            let scroll_out = egui::ScrollArea::horizontal()
+                .id_salt("phone-tools-scroll")
                 .auto_shrink([false, false])
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL)
+                .horizontal_scroll_offset(strip_state.offset_x)
                 .show(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
+                    crate::direction::horizontal_centered(ui, |ui| {
+                        if crate::direction::is_rtl() {
+                            ui.set_min_width(min_row_w);
+                        }
                         ui.spacing_mut().item_spacing.x = 2.0;
                         // The same slot keys as the desktop toolbar, so both remember the last tool used.
                         for (si, section) in sections.iter().enumerate() {
@@ -363,7 +774,8 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     ];
                                     ui.painter().add(egui::Shape::convex_polygon(corner, t.text_faint, Stroke::NONE));
                                 }
-                                if ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| resp.rect.contains(p)))
+                                if !strip_dragging
+                                    && ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| resp.rect.contains(p)))
                                     && let Some(origin) = ui.input(|i| i.pointer.press_origin())
                                 {
                                     ui.data_mut(|d| d.insert_temp(pressed_slot_id, (key, origin)));
@@ -371,16 +783,17 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 let open_here = ui.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(flyout_id)).is_some_and(|(k, _)| k == key);
                                 let pressed_slot = ui.data(|d| d.get_temp::<(egui::Id, egui::Pos2)>(pressed_slot_id));
                                 let latest_pos = ui.input(|i| i.pointer.latest_pos());
-                                let still_on_slot = pressed_slot.is_some_and(|(k, origin)| {
-                                    k == key
-                                        && latest_pos
-                                            .or(Some(origin))
-                                            .is_some_and(|pos| open_here || (resp.rect.expand(6.0).contains(pos) && (pos.x - origin.x).abs() <= 18.0))
-                                });
+                                let still_on_slot = !strip_dragging
+                                    && pressed_slot.is_some_and(|(k, origin)| {
+                                        k == key
+                                            && latest_pos
+                                                .or(Some(origin))
+                                                .is_some_and(|pos| open_here || (resp.rect.expand(6.0).contains(pos) && (pos.x - origin.x).abs() <= 14.0))
+                                    });
                                 if !still_on_slot && pressed_slot.is_some_and(|(k, _)| k == key) {
                                     ui.data_mut(|d| d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id));
                                 }
-                                let down_here = resp.is_pointer_button_down_on() || (still_on_slot && ui.input(|i| i.pointer.primary_down()));
+                                let down_here = !strip_dragging && (resp.is_pointer_button_down_on() || (still_on_slot && ui.input(|i| i.pointer.primary_down())));
                                 let held_for = down_here.then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
                                 if slot.len() > 1
                                     && let Some(seconds) = held_for
@@ -388,15 +801,17 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 {
                                     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
                                 }
-                                let long_press = held_for.is_some_and(|seconds| seconds >= 0.35) || resp.long_touched();
+                                let long_press = !strip_dragging && (held_for.is_some_and(|seconds| seconds >= 0.35) || resp.long_touched());
                                 let held_key = ui.data(|d| d.get_temp::<egui::Id>(held_id));
-                                let released_here =
-                                    still_on_slot && ui.input(|i| i.pointer.any_released() && i.pointer.interact_pos().is_some_and(|p| resp.rect.expand(6.0).contains(p)));
-                                let tapped = (resp.clicked() || released_here) && held_key != Some(key);
-                                let reclicked = open_here && (resp.secondary_clicked() || tapped);
+                                let released_here = !strip_dragging
+                                    && still_on_slot
+                                    && ui.input(|i| i.pointer.any_released() && i.pointer.interact_pos().is_some_and(|p| resp.rect.expand(6.0).contains(p)));
+                                let tapped = !strip_dragging && (resp.clicked() || released_here) && held_key != Some(key);
+                                let reclicked = !strip_dragging && open_here && (resp.secondary_clicked() || tapped);
                                 if reclicked {
                                     ui.data_mut(|d| d.remove::<(egui::Id, egui::Rect)>(flyout_id));
-                                } else if !open_here && slot.len() > 1 && (resp.secondary_clicked() || long_press) {
+                                    photocraft_doc::diag::note(|| format!("tool_strip flyout closed by reclick on slot={slot_index}"));
+                                } else if !strip_dragging && !open_here && slot.len() > 1 && (resp.secondary_clicked() || long_press) {
                                     ui.data_mut(|d| {
                                         d.insert_temp(flyout_id, (key, resp.rect));
                                         if long_press {
@@ -404,9 +819,13 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                         }
                                     });
                                     crate::tool_memory::select(app, tool);
+                                    photocraft_doc::diag::note(|| {
+                                        format!("tool_strip flyout opened: slot={slot_index} tool={:?} rect={:?}", tool, resp.rect)
+                                    });
                                     ui.ctx().request_repaint();
                                 } else if !open_here && tapped {
                                     crate::tool_memory::select(app, tool);
+                                    photocraft_doc::diag::note(|| format!("tool_strip tool selected: slot={slot_index} tool={:?}", tool));
                                 }
                                 if ui.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(flyout_id)).is_some_and(|(k, _)| k == key) && slot.len() > 1 {
                                     let label_w = slot
@@ -480,6 +899,9 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                                     });
                                                     if ir.clicked() || released_on_row {
                                                         crate::tool_memory::select(app, item);
+                                                        photocraft_doc::diag::note(|| {
+                                                            format!("tool_strip flyout item picked: slot={slot_index} item={:?}", item)
+                                                        });
                                                         ui.data_mut(|d| {
                                                             d.remove::<(egui::Id, egui::Rect)>(flyout_id);
                                                             d.remove::<egui::Id>(held_id);
@@ -495,6 +917,7 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     });
                                     if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                         ui.data_mut(|d| d.remove::<(egui::Id, egui::Rect)>(flyout_id));
+                                        photocraft_doc::diag::note(|| format!("tool_strip flyout dismissed: slot={slot_index}"));
                                     }
                                 }
                             }
@@ -507,12 +930,22 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         }
                     });
                 });
+            end_strip_scroll(
+                ui,
+                strip_scroll_id,
+                "tool_strip",
+                0x5453_5452,
+                strip_state,
+                scroll_out.inner_rect,
+                scroll_out.content_size,
+                scroll_out.state.offset.x,
+            );
         });
 }
 
 /// The active tool's options, in a row as wide as the screen. The row scrolls sideways, and its
-/// width is the screen's, so a control pinned to its right end (a transform's Commit, say) stays
-/// on screen while the other options scroll.
+/// minimum width is the screen's, so a control pinned to its right end (a transform's Commit, say)
+/// stays on screen while wider option rows scroll smoothly end-to-end.
 fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("phone-options")
@@ -523,14 +956,35 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let r = ui.max_rect();
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
             ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
+            let strip_scroll_id = egui::Id::new("phone-options-strip-scroll");
+            let strip_state = begin_strip_scroll(ui, strip_scroll_id, "options_strip", 0x4f50_5453, false);
+            let strip_dragging = strip_state.dragging;
             let visible = ui.available_width();
-            egui::ScrollArea::horizontal()
+            let min_row_w = strip_state.content_width.max(visible);
+            let scroll_out = egui::ScrollArea::horizontal()
+                .id_salt("phone-options-scroll")
                 .auto_shrink([false, false])
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL)
+                .horizontal_scroll_offset(strip_state.offset_x)
                 .show(ui, |ui| {
-                ui.set_width(visible);
-                panels::options_strip(app, ui);
-            });
+                    ui.set_min_width(min_row_w);
+                    if strip_dragging {
+                        ui.disable();
+                        ui.set_opacity(1.0);
+                    }
+                    panels::options_strip(app, ui);
+                });
+            end_strip_scroll(
+                ui,
+                strip_scroll_id,
+                "options_strip",
+                0x4f50_5453,
+                strip_state,
+                scroll_out.inner_rect,
+                scroll_out.content_size,
+                scroll_out.state.offset.x,
+            );
         });
 }
 
@@ -609,11 +1063,13 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut picked: Option<String> = None;
     let mut close = false;
     let screen = ctx.content_rect();
+    let viewport = ctx.viewport_rect();
+    let nav_bottom_inset = (viewport.bottom() - screen.bottom()).max(0.0);
     let t = Tokens::get(ctx);
     let sheet = egui::Id::new("phone-menu");
     // At the foot of the screen and as wide as it, so that a thumb reaches every row; above the
-    // virtual keyboard when that is on.
-    let lift = virtual_input::lift(app);
+    // virtual keyboard and any system bottom navigation bar inset.
+    let lift = virtual_input::lift(app) + nav_bottom_inset;
     let area = egui::Modal::default_area(sheet).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -8.0 - lift));
     let modal = egui::Modal::new(sheet).area(area).show(ctx, |ui| {
         ui.set_width(dialog_room(screen.size()).min(MENU_MAX_WIDTH));
@@ -948,6 +1404,7 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 
     // 2) Active CPU core count row and quick-select pills.
+    photocraft_doc::cpu::note_governor_state();
     let max_cores = photocraft_doc::cpu::max_cores();
     let active_cores = photocraft_doc::cpu::active_cores();
     let (cpu_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW), Sense::hover());
@@ -1380,5 +1837,95 @@ mod tests {
             assert_eq!(*cpu_states.borrow(), vec![1, 2]);
         }
         photocraft_doc::cpu::reset_active_cores();
+    }
+
+    #[test]
+    fn multi_swipe_right_to_left_scrolls_tool_strip_to_end_without_bounce_back() {
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let _dir = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.phone_layout = true;
+            let ctx = egui::Context::default();
+            PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+            let step = |app: &mut PhotocraftApp, time: f64, mut events: Vec<egui::Event>| {
+                let mut input = egui::RawInput {
+                    time: Some(time),
+                    events: std::mem::take(&mut events),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(360.0, 800.0))),
+                    ..Default::default()
+                };
+                sanitize_touch_events(&ctx, &mut input);
+                frame(&ctx, true, input, |ui| tool_strip(app, ui));
+            };
+            step(&mut app, 0.0, vec![]);
+            step(&mut app, 0.05, vec![]);
+
+            let strip_id = egui::Id::new("phone-tools-strip-scroll");
+            let initial = ctx.data(|d| d.get_temp::<StripScrollState>(strip_id)).unwrap_or_default();
+            assert!(initial.max_offset_x > 200.0, "tool strip overflows a 360pt phone screen: {:?}", initial);
+            let y = initial.strip_rect.unwrap().center().y;
+            let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+
+            // First right-to-left swipe: 330 -> 50, with a +2.5pt thumb-peel wobble on release.
+            step(&mut app, 0.10, vec![egui::Event::PointerMoved(egui::pos2(330.0, y)), pointer(egui::pos2(330.0, y), true)]);
+            step(&mut app, 0.12, vec![egui::Event::PointerMoved(egui::pos2(240.0, y))]);
+            step(&mut app, 0.14, vec![egui::Event::PointerMoved(egui::pos2(120.0, y))]);
+            step(&mut app, 0.16, vec![egui::Event::PointerMoved(egui::pos2(50.0, y))]);
+            step(&mut app, 0.18, vec![egui::Event::PointerMoved(egui::pos2(52.5, y)), pointer(egui::pos2(52.5, y), false)]);
+            let after_swipe1 = ctx.data(|d| d.get_temp::<StripScrollState>(strip_id)).unwrap();
+            assert!(after_swipe1.offset_x > 200.0, "first right-to-left swipe scrolled strip: {:?}", after_swipe1);
+
+            // Second right-to-left swipe starting back on the right at x=330: must NOT bounce back!
+            step(&mut app, 0.25, vec![egui::Event::PointerMoved(egui::pos2(330.0, y)), pointer(egui::pos2(330.0, y), true)]);
+            let on_repress = ctx.data(|d| d.get_temp::<StripScrollState>(strip_id)).unwrap();
+            assert!(
+                on_repress.offset_x >= after_swipe1.offset_x - 1.0,
+                "putting finger back on right side must not bounce offset_x back: before={} after={}",
+                after_swipe1.offset_x,
+                on_repress.offset_x
+            );
+            step(&mut app, 0.27, vec![egui::Event::PointerMoved(egui::pos2(200.0, y))]);
+            step(&mut app, 0.29, vec![egui::Event::PointerMoved(egui::pos2(40.0, y))]);
+            step(&mut app, 0.31, vec![pointer(egui::pos2(40.0, y), false)]);
+            let after_swipe2 = ctx.data(|d| d.get_temp::<StripScrollState>(strip_id)).unwrap();
+            assert!(after_swipe2.offset_x > after_swipe1.offset_x + 100.0, "second swipe advanced further: {:?}", after_swipe2);
+
+            // Third right-to-left swipe reach the end of the strip.
+            step(&mut app, 0.40, vec![egui::Event::PointerMoved(egui::pos2(330.0, y)), pointer(egui::pos2(330.0, y), true)]);
+            step(&mut app, 0.42, vec![egui::Event::PointerMoved(egui::pos2(30.0, y))]);
+            step(&mut app, 0.44, vec![pointer(egui::pos2(30.0, y), false)]);
+            let final_state = ctx.data(|d| d.get_temp::<StripScrollState>(strip_id)).unwrap();
+            assert!(
+                (final_state.offset_x - final_state.max_offset_x).abs() < 1.0,
+                "scrolled all the way to the end ({:?})",
+                final_state
+            );
+        }
+    }
+
+    #[test]
+    fn touch_cancel_injects_primary_button_release() {
+        let ctx = egui::Context::default();
+        let pos = egui::pos2(120.0, 760.0);
+        let press_input = egui::RawInput {
+            events: vec![
+                egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(1), phase: egui::TouchPhase::Start, pos, force: None },
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+            ],
+            ..Default::default()
+        };
+        frame(&ctx, true, press_input, |_| {});
+        assert!(ctx.input(|i| i.pointer.primary_down()));
+
+        let mut cancel_input = egui::RawInput {
+            events: vec![
+                egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(1), phase: egui::TouchPhase::Cancel, pos, force: None },
+                egui::Event::PointerGone,
+            ],
+            ..Default::default()
+        };
+        sanitize_touch_events(&ctx, &mut cancel_input);
+        frame(&ctx, true, cancel_input, |_| {});
+        assert!(!ctx.input(|i| i.pointer.primary_down()), "TouchPhase::Cancel releases the primary button");
     }
 }

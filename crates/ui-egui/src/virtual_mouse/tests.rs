@@ -440,6 +440,20 @@ fn a_finger_on_the_top_bar_is_not_the_pointers() {
     assert!(!out.clicked, "the top bar's press is not a pointer click");
     assert!(out.events.iter().any(|e| matches!(e, Event::Touch { .. })), "the touch goes to the screen");
     assert_eq!(clicks(&out.events), vec![(PointerButton::Primary, true)], "the screen's press goes through as it is");
+
+    let lift = vm.process(
+        vec![
+            touch(1, TouchPhase::End, bar),
+            Event::PointerButton { pos: bar, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+            Event::PointerGone,
+        ],
+        canvas(),
+        0.1,
+        Modifiers::NONE,
+        on_canvas,
+    );
+    assert!(lift.events.iter().any(|e| matches!(e, Event::PointerGone)), "lifting a screen touch forwards PointerGone");
+    assert_eq!(moves(&lift.events), 0, "no virtual pointer move is injected on the screen release frame");
 }
 
 /// The pointer may go up into the top bar, so its buttons can be pressed with it: its reach is the canvas plus the bar.

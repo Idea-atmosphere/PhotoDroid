@@ -1982,6 +1982,9 @@ impl eframe::App for PhotocraftApp {
         let mods = self.virtual_input.modifiers();
         let done = self.virtual_mouse.process(std::mem::take(&mut raw_input.events), reach, now, mods, on_canvas);
         raw_input.events = done.events;
+        if self.phone_layout {
+            mobile::sanitize_touch_events(ctx, raw_input);
+        }
         if done.clicked {
             // A click spends a modifier the keyboard holds for one key only, as a key press does.
             self.virtual_input.spend_once();

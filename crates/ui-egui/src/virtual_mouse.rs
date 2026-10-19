@@ -325,6 +325,10 @@ impl VirtualMouse {
                 Event::PointerGone => {
                     if self.press == Some(false) {
                         self.press = None;
+                        screen = true;
+                    }
+                    if screen {
+                        out.push(event);
                     }
                 }
                 other => out.push(other),

@@ -2175,12 +2175,15 @@ pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) 
 pub(crate) fn set_diagnostic_debug(app: &mut PhotocraftApp, enabled: bool) {
     if enabled {
         photocraft_doc::diag::set_enabled(true);
-        photocraft_doc::diag::note(|| {
+        let tool = app.ui.tool;
+        let docs = app.session.documents().len();
+        let lang = app.session.prefs().interface.language.clone();
+        let rtl = crate::direction::is_rtl();
+        photocraft_doc::diag::note(move || {
             format!(
-                "PhotoCraft {} diagnostic log enabled (active CPU cores: {}/{})",
+                "PhotoCraft {} diagnostic log enabled ({}, tool={tool:?}, docs={docs}, lang={lang}, rtl={rtl})",
                 env!("CARGO_PKG_VERSION"),
-                photocraft_doc::cpu::active_cores(),
-                photocraft_doc::cpu::max_cores()
+                photocraft_doc::cpu::diag_summary()
             )
         });
         if let Some(cb) = app.services.set_debug_log.as_mut()

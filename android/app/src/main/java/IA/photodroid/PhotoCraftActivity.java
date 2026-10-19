@@ -91,6 +91,7 @@ public class PhotoCraftActivity extends NativeActivity {
     private volatile int insetBottom;
     private volatile int insetLeft;
     private volatile int insetRight;
+    private volatile String insetDiag = "";
 
     @Override
     protected void onCreate(Bundle state) {
@@ -108,19 +109,55 @@ public class PhotoCraftActivity extends NativeActivity {
             window.setDecorFitsSystemWindows(false);
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         } else {
-            // Before Android 11 the window is laid out between the bars already, so only the
-            // notch needs reporting, and the keyboard resizes the window.
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         }
-        window.getDecorView().setOnApplyWindowInsetsListener((view, insets) -> {
-            recordInsets(insets);
+        View decorView = window.getDecorView();
+        decorView.setOnApplyWindowInsetsListener((view, insets) -> {
+            recordInsets(view, insets);
+            updateSystemGestureExclusion(view);
             return insets;
         });
+        decorView.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            refreshInsets();
+            updateSystemGestureExclusion(v);
+        });
+        decorView.post(() -> {
+            decorView.requestApplyInsets();
+            refreshInsets();
+            updateSystemGestureExclusion(decorView);
+        });
+        refreshInsets();
         // Picked files that an earlier run didn't get to are stale now.
         deleteTree(new File(getCacheDir(), "open"));
 
         // Show the welcome & donation popup on startup unless permanently dismissed.
-        window.getDecorView().post(this::maybeShowWelcomePopup);
+        decorView.post(this::maybeShowWelcomePopup);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Window window = getWindow();
+        if (window != null) {
+            View decorView = window.getDecorView();
+            decorView.post(() -> {
+                decorView.requestApplyInsets();
+                refreshInsets();
+                updateSystemGestureExclusion(decorView);
+            });
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            refreshInsets();
+            Window window = getWindow();
+            if (window != null) {
+                updateSystemGestureExclusion(window.getDecorView());
+            }
+        }
     }
 
     @Override
@@ -405,7 +442,15 @@ public class PhotoCraftActivity extends NativeActivity {
                     return event == null ? "" : event;
                 }
                 case "insets":
+                    if (insetTop == 0 && insetBottom == 0 && insetLeft == 0 && insetRight == 0) {
+                        refreshInsets();
+                    }
                     return ok(insetTop + "," + insetBottom + "," + insetLeft + "," + insetRight);
+                case "insets_diag":
+                    if (insetDiag.isEmpty()) {
+                        refreshInsets();
+                    }
+                    return ok(insetDiag);
                 case "save":
                     return ok(save(argument));
                 case "delete_logs":
@@ -648,35 +693,206 @@ public class PhotoCraftActivity extends NativeActivity {
 
     // ---- System bars and keyboard ----
 
-    private void recordInsets(WindowInsets insets) {
-        int top;
-        int bottom;
-        int left;
-        int right;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-            Insets keyboard = insets.getInsets(WindowInsets.Type.ime());
-            top = bars.top;
-            left = bars.left;
-            right = bars.right;
-            bottom = Math.max(bars.bottom, keyboard.bottom);
-        } else {
-            top = 0;
-            bottom = 0;
-            left = 0;
-            right = 0;
-            DisplayCutout cutout = insets.getDisplayCutout();
-            if (cutout != null) {
-                top = cutout.getSafeInsetTop();
-                bottom = cutout.getSafeInsetBottom();
-                left = cutout.getSafeInsetLeft();
-                right = cutout.getSafeInsetRight();
+    private void refreshInsets() {
+        try {
+            Window window = getWindow();
+            if (window == null) {
+                return;
+            }
+            View decor = window.getDecorView();
+            WindowInsets rootInsets = decor != null ? decor.getRootWindowInsets() : null;
+            recordInsets(decor, rootInsets);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private int getNavBarInteractionMode() {
+        try {
+            Resources res = getResources();
+            int id = res.getIdentifier("config_navBarInteractionMode", "integer", "android");
+            if (id != 0) {
+                return res.getInteger(id);
+            }
+        } catch (Throwable ignored) {
+        }
+        return -1;
+    }
+
+    private int getDimensionPixelSizeByName(String name) {
+        try {
+            Resources res = getResources();
+            int id = res.getIdentifier(name, "dimen", "android");
+            if (id != 0) {
+                return res.getDimensionPixelSize(id);
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0;
+    }
+
+    @SuppressWarnings("deprecation")
+    private void recordInsets(View view, WindowInsets insets) {
+        if (view == null) {
+            Window w = getWindow();
+            if (w != null) {
+                view = w.getDecorView();
             }
         }
-        insetTop = top;
-        insetBottom = bottom;
-        insetLeft = left;
-        insetRight = right;
+        if (insets == null && view != null) {
+            insets = view.getRootWindowInsets();
+        }
+
+        int visTop = 0, visBottom = 0, visLeft = 0, visRight = 0;
+        int ignTop = 0, ignBottom = 0, ignLeft = 0, ignRight = 0;
+        int imeBottom = 0;
+        int sysTop = 0, sysBottom = 0, sysLeft = 0, sysRight = 0;
+        int stableTop = 0, stableBottom = 0, stableLeft = 0, stableRight = 0;
+        int cutTop = 0, cutBottom = 0, cutLeft = 0, cutRight = 0;
+
+        if (insets != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                int barTypes = WindowInsets.Type.systemBars()
+                        | WindowInsets.Type.navigationBars()
+                        | WindowInsets.Type.statusBars()
+                        | WindowInsets.Type.displayCutout();
+                Insets vis = insets.getInsets(barTypes);
+                visTop = vis.top;
+                visBottom = vis.bottom;
+                visLeft = vis.left;
+                visRight = vis.right;
+
+                int ignTypes = barTypes | WindowInsets.Type.tappableElement();
+                Insets ign = insets.getInsetsIgnoringVisibility(ignTypes);
+                ignTop = ign.top;
+                ignBottom = ign.bottom;
+                ignLeft = ign.left;
+                ignRight = ign.right;
+
+                Insets keyboard = insets.getInsets(WindowInsets.Type.ime());
+                imeBottom = keyboard.bottom;
+            }
+            sysTop = insets.getSystemWindowInsetTop();
+            sysBottom = insets.getSystemWindowInsetBottom();
+            sysLeft = insets.getSystemWindowInsetLeft();
+            sysRight = insets.getSystemWindowInsetRight();
+
+            stableTop = insets.getStableInsetTop();
+            stableBottom = insets.getStableInsetBottom();
+            stableLeft = insets.getStableInsetLeft();
+            stableRight = insets.getStableInsetRight();
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                DisplayCutout cutout = insets.getDisplayCutout();
+                if (cutout != null) {
+                    cutTop = cutout.getSafeInsetTop();
+                    cutBottom = cutout.getSafeInsetBottom();
+                    cutLeft = cutout.getSafeInsetLeft();
+                    cutRight = cutout.getSafeInsetRight();
+                }
+            }
+        }
+
+        int top = Math.max(Math.max(visTop, ignTop), Math.max(Math.max(sysTop, stableTop), cutTop));
+        int bottom = Math.max(
+                Math.max(Math.max(visBottom, ignBottom), imeBottom),
+                Math.max(Math.max(sysBottom, stableBottom), cutBottom)
+        );
+        int left = Math.max(Math.max(visLeft, ignLeft), Math.max(Math.max(sysLeft, stableLeft), cutLeft));
+        int right = Math.max(Math.max(visRight, ignRight), Math.max(Math.max(sysRight, stableRight), cutRight));
+
+        int viewW = view != null ? view.getWidth() : 0;
+        int viewH = view != null ? view.getHeight() : 0;
+        int frameTop = 0, frameBottom = 0, frameLeft = 0, frameRight = 0;
+        if (view != null && viewW > 0 && viewH > 0) {
+            android.graphics.Rect vf = new android.graphics.Rect();
+            view.getWindowVisibleDisplayFrame(vf);
+            if (vf.width() > 0 && vf.height() > 0) {
+                frameTop = Math.max(0, vf.top);
+                frameBottom = Math.max(0, viewH - vf.bottom);
+                frameLeft = Math.max(0, vf.left);
+                frameRight = Math.max(0, viewW - vf.right);
+                top = Math.max(top, frameTop);
+                bottom = Math.max(bottom, frameBottom);
+                left = Math.max(left, frameLeft);
+                right = Math.max(right, frameRight);
+            }
+        }
+
+        int navMode = getNavBarInteractionMode();
+        int navHeightRes = getDimensionPixelSizeByName("navigation_bar_height");
+        DisplayMetrics usableMetrics = getResources().getDisplayMetrics();
+        DisplayMetrics realMetrics = new DisplayMetrics();
+        realMetrics.setTo(usableMetrics);
+        try {
+            WindowManager wm = getWindowManager();
+            if (wm != null && wm.getDefaultDisplay() != null) {
+                wm.getDefaultDisplay().getRealMetrics(realMetrics);
+            }
+        } catch (Throwable ignored) {
+        }
+        int diffH = Math.max(0, realMetrics.heightPixels - usableMetrics.heightPixels);
+        int diffW = Math.max(0, realMetrics.widthPixels - usableMetrics.widthPixels);
+        boolean portrait = realMetrics.widthPixels <= realMetrics.heightPixels;
+
+        // Ensure 3-button (navMode == 0) and 2-button (navMode == 1) navigation bars are never overlapped
+        // even when WindowInsets or winit fullscreen flags report 0 for systemBars().
+        if (navMode == 0 || navMode == 1) {
+            int fallbackNav = Math.max(navHeightRes, dp(48));
+            if (portrait) {
+                int expectedBottom = diffH > top ? (diffH - top) : fallbackNav;
+                if (bottom < dp(24)) {
+                    bottom = Math.max(bottom, Math.max(expectedBottom, fallbackNav));
+                }
+            } else if (left < dp(24) && right < dp(24) && bottom < dp(24)) {
+                int expectedSide = diffW > 0 ? diffW : fallbackNav;
+                right = Math.max(right, expectedSide);
+            }
+        } else if (portrait && bottom == 0 && diffH > top + dp(16) && (viewH == 0 || viewH >= realMetrics.heightPixels - dp(4))) {
+            bottom = Math.max(bottom, diffH - top);
+        }
+
+        insetTop = Math.max(0, top);
+        insetBottom = Math.max(0, bottom);
+        insetLeft = Math.max(0, left);
+        insetRight = Math.max(0, right);
+        insetDiag = "sdk=" + Build.VERSION.SDK_INT
+                + " navMode=" + navMode
+                + " navRes=" + navHeightRes
+                + " applied=" + insetTop + "," + insetBottom + "," + insetLeft + "," + insetRight
+                + " vis=" + visTop + "," + visBottom + "," + visLeft + "," + visRight
+                + " ign=" + ignTop + "," + ignBottom + "," + ignLeft + "," + ignRight
+                + " ime=" + imeBottom
+                + " sys=" + sysTop + "," + sysBottom + "," + sysLeft + "," + sysRight
+                + " stable=" + stableTop + "," + stableBottom + "," + stableLeft + "," + stableRight
+                + " cut=" + cutTop + "," + cutBottom + "," + cutLeft + "," + cutRight
+                + " frame=" + frameTop + "," + frameBottom + "," + frameLeft + "," + frameRight
+                + " view=" + viewW + "x" + viewH
+                + " usable=" + usableMetrics.widthPixels + "x" + usableMetrics.heightPixels
+                + " real=" + realMetrics.widthPixels + "x" + realMetrics.heightPixels;
+    }
+
+    /**
+     * Excludes the bottom toolbar and options strip region from Android's edge back / quick-switch
+     * system gestures on Android 10+ (API 29+), preventing right-to-left swipes on the bottom bars
+     * from being intercepted or cancelled by the OS.
+     */
+    private void updateSystemGestureExclusion(View view) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || view == null) {
+            return;
+        }
+        try {
+            int w = view.getWidth();
+            int h = view.getHeight();
+            if (w <= 0 || h <= 0) {
+                return;
+            }
+            int safeBottom = Math.max(0, h - insetBottom);
+            int stripTop = Math.max(0, safeBottom - dp(132));
+            List<android.graphics.Rect> rects = new ArrayList<>(1);
+            rects.add(new android.graphics.Rect(0, stripTop, w, h));
+            view.setSystemGestureExclusionRects(rects);
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
