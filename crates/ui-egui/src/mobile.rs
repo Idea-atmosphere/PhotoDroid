@@ -108,7 +108,7 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         photocraft_doc::cpu::note_governor_state();
         let vp = ui.ctx().viewport_rect();
         let cr = ui.ctx().content_rect();
-        let insets = ui.ctx().input(|i| i.safe_area_insets());
+        let insets = ui.ctx().input(|i| i.safe_area_insets()).0;
         let ppp = ui.ctx().pixels_per_point();
         let key = ((vp.width().round() as u64) << 48)
             ^ ((vp.height().round() as u64) << 32)
@@ -178,8 +178,7 @@ pub fn sanitize_touch_events(ctx: &egui::Context, raw_input: &mut egui::RawInput
         return;
     }
     let diag_on = photocraft_doc::diag::enabled();
-    let mods = raw_input.modifiers;
-    let had_primary_down = ctx.input(|i| i.pointer.primary_down());
+    let (had_primary_down, mods) = ctx.input(|i| (i.pointer.primary_down(), i.modifiers));
     let mut primary_down = had_primary_down;
     let mut saw_release_this_frame = false;
     let mut saw_gone_since_release = false;
