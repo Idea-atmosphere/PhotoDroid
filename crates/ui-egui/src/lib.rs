@@ -837,10 +837,6 @@ pub struct PhotocraftApp {
 
 impl PhotocraftApp {
     pub fn new(session: Session, services: Services) -> Self {
-        // The diagnostic log starts off by default and is toggled from the phone menu's Debug section.
-        if !cfg!(target_os = "android") {
-            photocraft_doc::diag::set_enabled(false);
-        }
         let mut app = Self {
             session,
             ui: UiState::default(),
