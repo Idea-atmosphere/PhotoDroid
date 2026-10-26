@@ -590,7 +590,7 @@ impl VirtualMouse {
         // The arrow's tip is at about 3.6 of its 24 units from the top-left corner.
         icons::cursor(ctx, "mouse-pointer-2", p, vec2(3.6, 3.6) / 24.0, 28.0);
         let dot = if self.locked || self.down { t.accent } else { Color32::WHITE };
-        let painter = ctx.layer_painter(LayerId::new(Order::Debug, Id::new("virtual-mouse-dot")));
+        let painter = ctx.layer_painter(LayerId::new(Order::Debug, Id::unique("virtual-mouse-dot")));
         if self.locked {
             let badge = Rect::from_center_size(p + vec2(-14.0, 16.0), vec2(18.0, 18.0));
             painter.circle_filled(badge.center(), 10.0, Color32::from_black_alpha(170));
@@ -634,7 +634,7 @@ pub fn forget_view(ctx: &egui::Context) {
 }
 
 fn view_id() -> Id {
-    Id::new("virtual-mouse-canvas-view")
+    Id::unique("virtual-mouse-canvas-view")
 }
 
 /// Where the loupe goes on `screen`: the top-left corner under the top bar (`top`), or the top-right one when the
@@ -654,7 +654,7 @@ fn draw_loupe(ctx: &egui::Context, p: Pos2, view: CanvasView) {
     let screen = ctx.viewport_rect();
     let top = crate::mobile::top_bar_rect(ctx).map_or(screen.top(), |r| r.bottom());
     let loupe = loupe_rect(screen, top, p);
-    let painter = ctx.layer_painter(LayerId::new(Order::Debug, Id::new("virtual-mouse-loupe")));
+    let painter = ctx.layer_painter(LayerId::new(Order::Debug, Id::unique("virtual-mouse-loupe")));
     painter.rect_filled(loupe, 8.0, Color32::WHITE);
     let side = LOUPE / MAGNIFY;
     let sample = Rect::from_center_size(p, vec2(side, side));

@@ -63,7 +63,7 @@ pub fn active(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
 
 /// The key of the flag that says whether the touch gestures are on this frame (see [`set_gestures`]).
 fn gestures_key() -> egui::Id {
-    egui::Id::new("photocraft-phone-gestures")
+    egui::Id::unique("photocraft-phone-gestures")
 }
 
 /// Records whether the touch gestures are on this frame: `lib.rs` sets it to the phone layout each
@@ -265,19 +265,19 @@ pub fn sanitize_touch_events(ctx: &egui::Context, raw_input: &mut egui::RawInput
 // The phone chrome's state lives in egui's memory: none of it is saved with the document.
 
 fn sheet_open_id() -> egui::Id {
-    egui::Id::new("phone-sheet-open")
+    egui::Id::unique("phone-sheet-open")
 }
 
 fn sheet_group_id() -> egui::Id {
-    egui::Id::new("phone-sheet-group")
+    egui::Id::unique("phone-sheet-group")
 }
 
 fn menu_open_id() -> egui::Id {
-    egui::Id::new("phone-menu-open")
+    egui::Id::unique("phone-menu-open")
 }
 
 fn menu_query_id() -> egui::Id {
-    egui::Id::new("phone-menu-query")
+    egui::Id::unique("phone-menu-query")
 }
 
 fn is_set(ctx: &egui::Context, id: egui::Id) -> bool {
@@ -289,7 +289,7 @@ fn set_flag(ctx: &egui::Context, id: egui::Id, on: bool) {
 }
 
 fn top_bar_rect_id() -> egui::Id {
-    egui::Id::new("phone-top-bar-rect")
+    egui::Id::unique("phone-top-bar-rect")
 }
 
 /// The top bar's rectangle as it was last drawn (`None` before the first frame of the phone layout).
@@ -387,14 +387,14 @@ fn mouse_bar(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // The right click button is a switch for the menu it opens: pressed while a menu is open, it only closes that
     // menu. The press itself may close the menu before the button sees its click (a press outside a menu closes
     // it), so whether one was open is taken from the frame before the press.
-    let state = egui::Id::new("phone-mouse-bar-menu");
+    let state = egui::Id::unique("phone-mouse-bar-menu");
     let open_now = egui::Popup::is_any_open(ctx);
     let (open_before, mut open_at_press): (bool, bool) = ctx.data(|d| d.get_temp(state)).unwrap_or_default();
     if ctx.input(|i| i.pointer.any_pressed()) {
         open_at_press = open_before || open_now;
     }
     let (mut right, mut fine) = (false, false);
-    egui::Area::new(egui::Id::new("phone-mouse-bar"))
+    egui::Area::new(egui::Id::unique("phone-mouse-bar"))
         .order(egui::Order::Foreground)
         .pivot(egui::Align2::RIGHT_BOTTOM)
         .fixed_pos(canvas.right_bottom() - vec2(10.0, 12.0))
@@ -427,7 +427,7 @@ fn mouse_bar(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// was pressed.
 fn toggle_button(ui: &mut egui::Ui, icon: &str, on: bool, tooltip: &str) -> bool {
     let resp = icons::button(ui, icon, TOUCH, on, tooltip);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tooltip));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tooltip));
     resp.clicked()
 }
 
@@ -692,7 +692,7 @@ fn end_strip_scroll(
 fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let sections = panels::visible_sections(&app.session.prefs().toolbar.hidden);
-    let flyout_id = egui::Id::new("tool-flyout");
+    let flyout_id = egui::Id::unique("tool-flyout");
     let held_id = flyout_id.with("held");
     let pressed_slot_id = flyout_id.with("pressed-slot");
     if ui.input(|i| i.pointer.any_pressed()) {
@@ -715,7 +715,7 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
             let hold_flyout_active = ui.data(|d| d.get_temp::<egui::Id>(held_id)).is_some()
                 && ui.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(flyout_id)).is_some();
-            let strip_scroll_id = egui::Id::new("phone-tools-strip-scroll");
+            let strip_scroll_id = egui::Id::unique("phone-tools-strip-scroll");
             let strip_state = begin_strip_scroll(ui, strip_scroll_id, "tool_strip", 0x5453_5452, hold_flyout_active);
             let strip_dragging = strip_state.dragging;
             if strip_dragging {
@@ -749,7 +749,7 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 ui.add_space(3.0);
                             }
                             for (slot_index, slot) in section.iter() {
-                                let key = egui::Id::new(("tool-slot", *slot_index));
+                                let key = egui::Id::unique(("tool-slot", *slot_index));
                                 let tool = panels::slot_tool(ui, app.ui.tool, slot, key);
                                 let selected = slot.contains(&app.ui.tool);
                                 // Suppress hover tooltips on the phone strip so holding a tool button opens its flyout
@@ -855,7 +855,7 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                                 ui.spacing_mut().item_spacing.y = 2.0;
                                                 for &item in slot.iter() {
                                                     let (r, ir) = ui.allocate_exact_size(vec2(fw, 40.0), Sense::click());
-                                                    ir.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, item == tool, tl!(item.label())));
+                                                    ir.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, item == tool, tl!(item.label())));
                                                     let pointer_over_row =
                                                         ui.input(|i| i.pointer.primary_down() && i.pointer.interact_pos().is_some_and(|p| r.contains(p)));
                                                     if pointer_over_row {
@@ -955,7 +955,7 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let r = ui.max_rect();
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
             ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
-            let strip_scroll_id = egui::Id::new("phone-options-strip-scroll");
+            let strip_scroll_id = egui::Id::unique("phone-options-strip-scroll");
             let strip_state = begin_strip_scroll(ui, strip_scroll_id, "options_strip", 0x4f50_5453, false);
             let strip_dragging = strip_state.dragging;
             let visible = ui.available_width();
@@ -1065,7 +1065,7 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let viewport = ctx.viewport_rect();
     let nav_bottom_inset = (viewport.bottom() - screen.bottom()).max(0.0);
     let t = Tokens::get(ctx);
-    let sheet = egui::Id::new("phone-menu");
+    let sheet = egui::Id::unique("phone-menu");
     // At the foot of the screen and as wide as it, so that a thumb reaches every row; above the
     // virtual keyboard and any system bottom navigation bar inset.
     let lift = virtual_input::lift(app) + nav_bottom_inset;
@@ -1172,7 +1172,7 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// The menu sheet's page: the menus it has opened, outermost first (empty: the top menus).
 fn menu_path_id() -> egui::Id {
-    egui::Id::new("phone-menu-path")
+    egui::Id::unique("phone-menu-path")
 }
 
 /// What one page of the menu sheet lists: the commands whose menu path is exactly the page's, and the
@@ -1274,7 +1274,7 @@ fn page_entries<'a>(items: &'a [menus::MenuItem], at: &[String]) -> Vec<PageEntr
 fn menu_row(ui: &mut egui::Ui, label: &str, detail: &str, checked: bool, enabled: bool, submenu: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     if enabled && resp.hovered() {
         ui.painter().rect_filled(rect, t.radius_sm, t.hover);
     }
@@ -1376,7 +1376,7 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // 1) Debug (.txt log) toggle row.
     let debug_on = photocraft_doc::diag::enabled();
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, debug_on, "Debug"));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, debug_on, "Debug"));
     if resp.hovered() {
         ui.painter().rect_filled(rect, t.radius_sm, t.hover);
     }
@@ -1422,8 +1422,8 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let count_center = egui::pos2(cpu_rect.right() - 62.0, cpu_rect.center().y);
     let inc_rect = egui::Rect::from_center_size(egui::pos2(cpu_rect.right() - 24.0, cpu_rect.center().y), vec2(34.0, 34.0));
 
-    let dec_resp = ui.interact(dec_rect, ui.id().with("cpu-dec"), Sense::click());
-    dec_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_dec, "Decrease CPU cores"));
+    let dec_resp = ui.interact(dec_rect, ui.scope_id().with("cpu-dec"), Sense::click());
+    dec_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_dec, "Decrease CPU cores"));
     ui.painter().rect_filled(dec_rect, t.radius_sm, if can_dec && dec_resp.hovered() { t.hover } else { t.field });
     ui.painter().rect_stroke(dec_rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     ui.painter().text(dec_rect.center(), egui::Align2::CENTER_CENTER, "−", theme::semibold(16.0), if can_dec { t.text } else { t.text_faint });
@@ -1433,8 +1433,8 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
     ui.painter().text(count_center, egui::Align2::CENTER_CENTER, format!("{active_cores}"), theme::semibold(14.0), t.text);
 
-    let inc_resp = ui.interact(inc_rect, ui.id().with("cpu-inc"), Sense::click());
-    inc_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_inc, "Increase CPU cores"));
+    let inc_resp = ui.interact(inc_rect, ui.scope_id().with("cpu-inc"), Sense::click());
+    inc_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_inc, "Increase CPU cores"));
     ui.painter().rect_filled(inc_rect, t.radius_sm, if can_inc && inc_resp.hovered() { t.hover } else { t.field });
     ui.painter().rect_stroke(inc_rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     ui.painter().text(inc_rect.center(), egui::Align2::CENTER_CENTER, "+", theme::semibold(16.0), if can_inc { t.text } else { t.text_faint });
@@ -1451,7 +1451,7 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let selected = core == active_cores;
                 let (pill_rect, pill_resp) = ui.allocate_exact_size(vec2(34.0, 30.0), Sense::click());
                 let label = format!("CPU {core}");
-                pill_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &label));
+                pill_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &label));
                 let (pbg, pborder, pfg) = if selected {
                     (t.accent_soft, t.accent_border, t.accent_text)
                 } else if pill_resp.hovered() {
@@ -1756,20 +1756,20 @@ mod tests {
         step(&mut app, 1.0, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
         step(&mut app, 1.2, vec![egui::Event::PointerMoved(at + vec2(8.0, 0.0))]);
         step(&mut app, 1.38, vec![]);
-        let key = egui::Id::new(("tool-slot", index));
-        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout"))).map(|(id, _)| id), Some(key));
+        let key = egui::Id::unique(("tool-slot", index));
+        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout"))).map(|(id, _)| id), Some(key));
         // Lifting the finger at the end of the long press keeps the flyout open.
         step(&mut app, 1.45, vec![pointer(at + vec2(8.0, 0.0), false)]);
         step(&mut app, 1.5, vec![]);
         assert_eq!(app.ui.tool, Tool::Lasso);
-        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout"))).map(|(id, _)| id), Some(key));
+        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout"))).map(|(id, _)| id), Some(key));
         // Tap the 3rd row (Magnetic Lasso Tool) in the flyout.
         let menu = ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
         let magnetic_row = egui::pos2(menu.center().x, menu.bottom() - 24.0);
         step(&mut app, 2.0, vec![egui::Event::PointerMoved(magnetic_row), pointer(magnetic_row, true)]);
         step(&mut app, 2.05, vec![pointer(magnetic_row, false)]);
         assert_eq!(app.ui.tool, Tool::MagneticLasso);
-        assert!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout"))).is_none());
+        assert!(ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout"))).is_none());
     }
 
     #[test]
@@ -1859,7 +1859,7 @@ mod tests {
             step(&mut app, 0.0, vec![]);
             step(&mut app, 0.05, vec![]);
 
-            let strip_id = egui::Id::new("phone-tools-strip-scroll");
+            let strip_id = egui::Id::unique("phone-tools-strip-scroll");
             let initial = ctx.data(|d| d.get_temp::<StripScrollState>(strip_id)).unwrap_or_default();
             assert!(initial.max_offset_x > 200.0, "tool strip overflows a 360pt phone screen: {:?}", initial);
             let y = initial.strip_rect.unwrap().center().y;

@@ -24,7 +24,7 @@ struct Guard {
 }
 
 fn guard_id() -> egui::Id {
-    egui::Id::new("pc-touch-guard")
+    egui::Id::unique("pc-touch-guard")
 }
 
 /// Whether the tool must get nothing this frame, because two fingers are (or were, until every finger has lifted) on the

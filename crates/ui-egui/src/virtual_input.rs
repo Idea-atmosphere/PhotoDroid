@@ -337,7 +337,7 @@ pub fn logic(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Loads the system's Arabic-script font, once, for the Persian keys (Android). egui's own fonts have no
 /// Persian letters, and the CJK fallback looks only at CJK text.
 fn load_script_font(ctx: &egui::Context) {
-    let id = egui::Id::new("virtual-keyboard-script-font");
+    let id = egui::Id::unique("virtual-keyboard-script-font");
     if ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
         return;
     }
@@ -616,7 +616,7 @@ fn body(app: &PhotocraftApp, ui: &mut egui::Ui) -> Option<KeyDef> {
                     continue;
                 }
                 let (rect, resp) = ui.allocate_exact_size(vec2(w, KEY_H), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, key_name(key)));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, key_name(key)));
                 let label = shown_label(key, shift);
                 paint_key(ui, rect, &resp, key, vi, &label, &t);
                 if resp.clicked() {
@@ -677,7 +677,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, covered: bool) {
         });
     if let Some(r) = outer.filter(|_| covered) {
         let mut above = None;
-        egui::Area::new(egui::Id::new("virtual-keys-over-screen"))
+        egui::Area::new(egui::Id::unique("virtual-keys-over-screen"))
             .order(egui::Order::Tooltip)
             .fixed_pos(r.min)
             .movable(false)
