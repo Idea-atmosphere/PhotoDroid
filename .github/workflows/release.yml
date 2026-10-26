@@ -205,14 +205,20 @@ jobs:
             "$ANDROID_HOME/build-tools/35.0.0/aapt2"
           DEST="android/app/build/outputs/apk/release/PhotoDroid-v${VERSION_NAME}.apk"
           [ "$SRC" = "$DEST" ] || mv "$SRC" "$DEST"
+          ZIP_DEST="android/app/build/outputs/apk/release/PhotoDroid-v${VERSION_NAME}.zip"
+          zip -9 -j "$ZIP_DEST" "$DEST"
           echo "path=$DEST" >> "$GITHUB_OUTPUT"
+          echo "zip_path=$ZIP_DEST" >> "$GITHUB_OUTPUT"
           echo "filename=PhotoDroid-v${VERSION_NAME}.apk" >> "$GITHUB_OUTPUT"
+          echo "zip_filename=PhotoDroid-v${VERSION_NAME}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: PhotoDroid-v${{ steps.version.outputs.name }}-apk
-          path: ${{ steps.apk.outputs.path }}
+          path: |
+            ${{ steps.apk.outputs.path }}
+            ${{ steps.apk.outputs.zip_path }}
           if-no-files-found: error
 
       - name: Publish the GitHub release
@@ -220,7 +226,13 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: PhotoDroid v${{ steps.version.outputs.name }}
+          body: |
+            ### راهنمای دانلود
+            - **`PhotoDroid-v${{ steps.version.outputs.name }}.zip`**: دقیقاً همان برنامه و همان فایل `APK` است که صرفاً برای **کم‌حجم شدن دانلود** داخل فایل فشرده (`zip`) قرار داده شده است (پس از دانلود، فایل را از حالت فشرده خارج کرده و فایل `.apk` داخل آن را نصب کنید).
+            - **`PhotoDroid-v${{ steps.version.outputs.name }}.apk`**: فایل نصبی مستقیم برنامه (بدون فشرده‌سازی اضافه).
           generate_release_notes: true
           prerelease: false
           make_latest: true
-          files: ${{ steps.apk.outputs.path }}
+          files: |
+            ${{ steps.apk.outputs.path }}
+            ${{ steps.apk.outputs.zip_path }}
