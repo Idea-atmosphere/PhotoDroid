@@ -22,6 +22,7 @@ env:
 jobs:
   host-tests:
     name: Host tests (protocol and saved-layout code)
+    if: "!contains(github.event.head_commit.message, '[skip android-ci]')"
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -41,6 +42,7 @@ jobs:
   # type layer.
   ui-tests:
     name: Interface tests (touch gestures and the phone layout)
+    if: "!contains(github.event.head_commit.message, '[skip android-ci]')"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -71,6 +73,7 @@ jobs:
 
   apk:
     name: Build the arm64 APK
+    if: "!contains(github.event.head_commit.message, '[skip android-ci]')"
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
@@ -246,7 +249,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.lock
-          git commit -m "Update Cargo.lock for the Android dependencies [skip ci]"
+          git commit -m "Update Cargo.lock for the Android dependencies [skip android-ci]"
           git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning title=Cargo.lock::could not push the regenerated Cargo.lock (another push landed first?)"
 
       - name: Check the APK's contents

@@ -221,6 +221,6 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: PhotoDroid v${{ steps.version.outputs.name }}
           generate_release_notes: true
-          prerelease: ${{ github.event_name != 'push' }}
-          make_latest: ${{ github.event_name == 'push' }}
+          prerelease: false
+          make_latest: true
           files: ${{ steps.apk.outputs.path }}
