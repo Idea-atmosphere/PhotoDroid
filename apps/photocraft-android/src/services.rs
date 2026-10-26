@@ -147,9 +147,9 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
     let (debug_root, cpu_root) = (dirs.root().to_path_buf(), dirs.root().to_path_buf());
     let (prefs_load, prefs_save) = (dirs.preferences(), dirs.preferences());
     Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
+        import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             crate::crash_guard::guard("Open", || {
-                photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
             })
         })),
         export: Some(Box::new(export_document)),

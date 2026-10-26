@@ -907,6 +907,11 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
         size_ui_font(ctx, name, Arc::make_mut(data));
     }
     ctx.set_fonts(fonts);
+    if photocraft_text::craft_fonts::CRAFT_FONTS.is_empty() {
+        // Without bundled craft-fonts, CJK and non-Latin glyphs are loaded lazily after the first
+        // frame's output hook (`cjk_fonts`), so headless harnesses must allow tofu until then.
+        ctx.set_missing_glyph_policy(egui::epaint::text::MissingGlyphPolicy::Tofu);
+    }
     // egui keeps the first plugin of a type, so a re-install (language change) resets the
     // existing one. The new definitions land next pass: the plugin must not rescale before then.
     if ctx

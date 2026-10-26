@@ -47,6 +47,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ui-tests
+          cache-on-failure: true
       - name: Run the interface tests
         shell: bash
         run: |
