@@ -352,7 +352,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             // On the phone a lift leaves the outline open, unless it came back to the first point.
             let closes = !phone
                 || (d.points.len() >= 8 && {
-                    let reach = PHONE_CLOSE / zoom;
+                    let reach = PHONE_CLOSE / f64::from(zoom.max(0.01));
                     let from_start = |q: &[f64; 3]| (q[0] - d.start[0]).hypot(q[1] - d.start[1]);
                     (p[0] - d.start[0]).hypot(p[1] - d.start[1]) < reach && d.points.iter().map(from_start).fold(0.0, f64::max) > reach * 4.0
                 });

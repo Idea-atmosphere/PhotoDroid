@@ -60,7 +60,7 @@ jobs:
           cargo test -p photocraft-engine --lib -- an_open_writes_its_decode_and_its_document_to_the_log >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
           # Save Contents reaches every instance of a smart object that shares its contents (the engine's tests).
           cargo test -p photocraft-engine --lib -- save_contents_updates_every_instance_that_shares_the_source >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
-          tail -n 150 "$RUNNER_TEMP/ui-tests.log"
+          cat "$RUNNER_TEMP/ui-tests.log"
           if [ "$status" -ne 0 ]; then
             bash .github/scripts/report-failure.sh "Interface tests failed" "$RUNNER_TEMP/ui-tests.log"
             exit "$status"

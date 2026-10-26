@@ -937,7 +937,7 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 strip_state,
                 scroll_out.inner_rect,
                 scroll_out.content_size,
-                scroll_out.state.offset.x,
+                scroll_out.state.unclamped_offset().x,
             );
         });
 }
@@ -982,7 +982,7 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 strip_state,
                 scroll_out.inner_rect,
                 scroll_out.content_size,
-                scroll_out.state.offset.x,
+                scroll_out.state.unclamped_offset().x,
             );
         });
 }
