@@ -221,16 +221,47 @@ jobs:
             ${{ steps.apk.outputs.zip_path }}
           if-no-files-found: error
 
+      - name: Prepare release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.version.outputs.tag }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+          ZIP_PATH: ${{ steps.apk.outputs.zip_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK_MB="$(awk "BEGIN { printf \"%.1f\", $(stat -c%s "$APK_PATH") / 1048576 }")"
+          ZIP_MB="$(awk "BEGIN { printf \"%.1f\", $(stat -c%s "$ZIP_PATH") / 1048576 }")"
+          GUIDE_FILE="$RUNNER_TEMP/download-guide.md"
+          {
+            printf '### راهنمای دانلود\n'
+            printf -- '- **`PhotoDroid-v%s.zip` (~%s MB):** این فایل دقیقاً **همان برنامه و همان فایل `APK`** است که فقط برای **کم‌حجم شدن دانلود** داخل فایل فشرده (`zip`) قرار داده شده است (کافی است پس از دانلود، آن را از حالت فشرده خارج کرده و فایل `PhotoDroid-v%s.apk` داخل آن را نصب کنید).\n' "$VERSION_NAME" "$ZIP_MB" "$VERSION_NAME"
+            printf -- '- **`PhotoDroid-v%s.apk` (~%s MB):** فایل نصبی مستقیم خود برنامه (بدون فشرده‌سازی اضافه).\n' "$VERSION_NAME" "$APK_MB"
+          } > "$GUIDE_FILE"
+          EXISTING_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}" --jq '.body // ""' 2>/dev/null || true)"
+          BODY_FILE="$RUNNER_TEMP/release-body.md"
+          if [ -n "$EXISTING_BODY" ]; then
+            if printf '%s' "$EXISTING_BODY" | grep -q "PhotoDroid-v${VERSION_NAME}.zip"; then
+              printf '%s\n' "$EXISTING_BODY" > "$BODY_FILE"
+            else
+              cat "$GUIDE_FILE" > "$BODY_FILE"
+              printf '\n---\n\n%s\n' "$EXISTING_BODY" >> "$BODY_FILE"
+            fi
+            echo "generate_notes=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$GUIDE_FILE" > "$BODY_FILE"
+            echo "generate_notes=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish the GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: PhotoDroid v${{ steps.version.outputs.name }}
-          body: |
-            ### راهنمای دانلود
-            - **`PhotoDroid-v${{ steps.version.outputs.name }}.zip`**: دقیقاً همان برنامه و همان فایل `APK` است که صرفاً برای **کم‌حجم شدن دانلود** داخل فایل فشرده (`zip`) قرار داده شده است (پس از دانلود، فایل را از حالت فشرده خارج کرده و فایل `.apk` داخل آن را نصب کنید).
-            - **`PhotoDroid-v${{ steps.version.outputs.name }}.apk`**: فایل نصبی مستقیم برنامه (بدون فشرده‌سازی اضافه).
-          generate_release_notes: true
+          body_path: ${{ runner.temp }}/release-body.md
+          generate_release_notes: ${{ steps.notes.outputs.generate_notes == 'true' }}
           prerelease: false
           make_latest: true
           files: |
