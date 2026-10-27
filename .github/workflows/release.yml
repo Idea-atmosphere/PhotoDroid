@@ -26,6 +26,26 @@ jobs:
     timeout-minutes: 240
     permissions:
       contents: write
+    # Gate the signing key behind a manual approval.
+    #
+    # The four signing secrets live in the `release` environment (Settings >
+    # Environments > release > Environment secrets), not in the repository-level
+    # secrets. A job that names an environment gets its secrets only after every
+    # protection rule passes, so even a tag pushed from unrelated-looking code
+    # cannot read the keystore until somebody approves the run in the Actions UI.
+    #
+    # Settings that make this work, all under Settings > Environments > release:
+    #   - Deployment branches and tags: `main` (branch) and `v*` (tag) only.
+    #   - Required reviewers: the repository owner. Leave "Prevent self-review"
+    #     OFF: with a single maintainer, enabling it blocks every release.
+    #   - Environment secrets: ANDROID_KEYSTORE_BASE64, ANDROID_STORE_PASSWORD,
+    #     ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD (delete the repository-level
+    #     copies afterwards so `android.yml` cannot see them either).
+    environment:
+      name: release
+      # `steps.*` is not available in `environment.url`, so this points at the
+      # releases page rather than at one specific tag.
+      url: https://github.com/${{ github.repository }}/releases
 
     steps:
       - uses: actions/checkout@v4
