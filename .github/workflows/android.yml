@@ -1,9 +1,17 @@
 name: Android
 
 on:
+  # CI only runs for pushes to `main` and for pull requests.
+  #
+  # It deliberately does NOT run on pushes to arbitrary branches: a push to a
+  # feature branch is exactly what an unreviewed collaborator (or a stolen
+  # token) does first, and GitHub has no "approve this run" gate for pushes that
+  # come from inside the repository. Opening a pull request is the reviewed
+  # path, and pull requests from forks need approval in
+  # Settings > Actions > General > "Fork pull request workflows".
   push:
     branches:
-      - "**"
+      - main
   pull_request:
   workflow_dispatch:
 
