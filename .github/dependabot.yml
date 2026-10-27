@@ -1,0 +1,71 @@
+# .github/dependabot.yml
+#
+# Two kinds of pull requests come from here:
+#   * version updates  - a newer dependency release exists (this file drives them)
+#   * security updates - an advisory was published (opened automatically once
+#                        Dependabot alerts are on, whether or not this file exists)
+#
+# Every PR below runs the Android workflow with a read-only token and without
+# secrets, so `android.yml` builds a debug-signed APK for them. Nothing here can
+# reach the release signing key, which lives in the `release` environment.
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------- actions
+  # Every action in the workflows is pinned to a commit SHA (a tag like `@v4`
+  # can be moved to different code by the action's owner). This entry is what
+  # keeps those SHAs - and the `# vX.Y.Z` comments next to them - from going
+  # stale.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # ----------------------------------------------------------------- cargo
+  # The Rust workspace (crates/, apps/). Grouped so a batch of advisories
+  # arrives as one PR instead of ten. `applies-to` is required here: without it
+  # a group only covers version updates, not security updates.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+    ignore:
+      # egui and winit are not taken from crates.io: Cargo.toml patches them to
+      # storytold/egui and storytold/winit at a pinned revision. Dependabot
+      # cannot bump git dependencies, so letting it try only creates noise.
+      - dependency-name: "egui*"
+      - dependency-name: "winit"
+    groups:
+      cargo-versions:
+        applies-to: version-updates
+        patterns: ["*"]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # ---------------------------------------------------------------- gradle
+  # Optional. The Android module has no third-party dependencies today (only
+  # the Android Gradle Plugin), so this mostly watches the plugin itself.
+  # Delete this block if it only ever opens noise.
+  - package-ecosystem: "gradle"
+    directory: "/android"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore"
+    groups:
+      gradle:
+        applies-to: version-updates
+        patterns: ["*"]
