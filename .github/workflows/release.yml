@@ -105,7 +105,7 @@ jobs:
           fi
           SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses > "$RUNNER_TEMP/licenses.log" 2>&1 || true
-          if ! "$SDKMANAGER" --sdk_root="$SDK" "platforms;android-35" "build-tools;35.0.0" "ndk;${NDK_VERSION}" > "$RUNNER_TEMP/sdk.log" 2>&1; then
+          if ! "$SDKMANAGER" --sdk_root="$SDK" "platforms;android-35" "build-tools;36.0.0" "ndk;${NDK_VERSION}" > "$RUNNER_TEMP/sdk.log" 2>&1; then
             bash .github/scripts/report-failure.sh "Android SDK install failed" "$RUNNER_TEMP/sdk.log"
             tail -n 40 "$RUNNER_TEMP/sdk.log"
             exit 1
@@ -159,7 +159,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
-          gradle-version: '8.10.2'
+          gradle-version: '9.6.0'
 
       - name: Decode signing keystore outside the workspace
         env:

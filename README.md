@@ -171,7 +171,7 @@ also produces such a file, so it is not proof of a crash.
 ## Building
 
 You need: a stable Rust toolchain (1.95 or newer), the `aarch64-linux-android` target, Android NDK
-`27.2.12479018`, JDK 17, Android SDK platform 35 with build-tools 35.0.0, and Gradle 8.10.2.
+`27.2.12479018`, JDK 17, Android SDK platform 35 with build-tools 36.0.0, and Gradle 9.6.0.
 
 **1. Host tests** (no Android toolchain needed; this checks the protocol and the other pure code):
 
