@@ -757,7 +757,7 @@ impl Layouter {
             } else {
                 Alignment::Left
             };
-            layout.align(alignment, AlignmentOptions { align_when_overflowing: !wraps });
+            layout.align(alignment, AlignmentOptions { align_when_overflowing: !wraps, last_line_alignment: None });
 
             // Stack lines.
             if prev_baseline.is_some() {
@@ -796,7 +796,7 @@ impl Layouter {
                 }
                 prev_baseline = Some(baseline);
                 let last_line = li + 1 == nlines;
-                let adv = m.advance - m.trailing_whitespace;
+                let adv = m.advance - m.hanging_advance;
                 let map = |o: usize| (prange.start + o.saturating_sub(prefix.len())).min(content_end);
 
                 // Kerning after each cluster (px), per run in visual cluster order: manual
@@ -826,11 +826,11 @@ impl Layouter {
                             first,
                             last,
                             font: run.font().clone(),
-                            coords: run.normalized_coords().to_vec(),
+                            coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
                             size: run.font_size(),
                             rtl: c.is_rtl(),
                             blank: first.is_none() || c.is_space_or_nbsp() || c.text_range().end <= prefix.len(),
-                            upright: vertical && c.first_style().brush.1 != VClass::Rotate as u8,
+                            upright: vertical && c.style().brush.1 != VClass::Rotate as u8,
                             advance: c.advance() * hs,
                             growth: c.advance() * (hs - 1.0),
                             tab: tabs.binary_search(&c.text_range().start).is_ok(),
@@ -968,7 +968,7 @@ impl Layouter {
                     let face = out.faces.len() as u32;
                     out.faces.push(GlyphFace {
                         font: run.font().clone(),
-                        coords: run.normalized_coords().to_vec(),
+                        coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
                         size_px: run.font_size(),
                         embolden: synthetic_bold(synth.embolden(), st.weight, run.font_attrs().weight.value()),
                         skew_deg: synth.skew().unwrap_or(0.0),
@@ -987,8 +987,9 @@ impl Layouter {
                             cx += a;
                         }
                     }
-                    let rm = run.metrics();
-                    let vm = if vertical { Some(VMetrics::new(run.font(), run.normalized_coords(), run.font_size())) } else { None };
+                    let rm = run.font_metrics();
+                    let normalized_coords: Vec<i16> = run.normalized_coords().iter().map(|c| c.to_bits()).collect();
+                    let vm = if vertical { Some(VMetrics::new(run.font(), &normalized_coords, run.font_size())) } else { None };
                     let class = gr.style().brush.1;
                     // Glyphs of the run's own characters (not substituted by `vert`).
                     let plain: Vec<u32> = match (&vm, class) {
@@ -1249,7 +1250,7 @@ fn break_area(
             .lines()
             .map(|l| {
                 let lm = l.metrics();
-                (l.text_range().start, (lm.advance - lm.trailing_whitespace) * scale)
+                (l.text_range().start, (lm.advance - lm.hanging_advance) * scale)
             })
             .collect();
         // A line still wider than its span that some span of the shape would hold: the shape ran
@@ -1353,10 +1354,10 @@ fn line_metrics(line: &parley::Line<'_, RunBrush>, styles: &[CharStyle], ps: &Pa
     let (ascent, descent) = if vertical {
         let h = if half > 0.0 { half } else { first_px * 0.5 };
         (h, h)
-    } else if m.ascent > 0.0 || m.descent > 0.0 {
-        (m.ascent, m.descent)
     } else {
-        (first_px * 0.8, first_px * 0.2)
+        let content_ascent = m.baseline - m.content_block_min_coord;
+        let content_descent = m.content_block_max_coord - m.baseline;
+        if content_ascent > 0.0 || content_descent > 0.0 { (content_ascent, content_descent) } else { (first_px * 0.8, first_px * 0.2) }
     };
     LineMetrics { ascent, descent, leading }
 }
@@ -1682,7 +1683,8 @@ fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
         let Ok(font) = skrifa::FontRef::from_index(fd.data.as_ref(), fd.index) else {
             continue;
         };
-        let coords: Vec<skrifa::instance::NormalizedCoord> = run.normalized_coords().iter().map(|&c| skrifa::instance::NormalizedCoord::from_bits(c)).collect();
+        let coords: Vec<skrifa::instance::NormalizedCoord> =
+            run.normalized_coords().iter().map(|c| skrifa::instance::NormalizedCoord::from_bits(c.to_bits())).collect();
         let loc = skrifa::instance::LocationRef::new(&coords);
         let size = skrifa::instance::Size::new(run.font_size());
         let h = font.charmap().map('d').and_then(|g| font.glyph_metrics(size, loc).bounds(g)).map(|b| b.y_max).or_else(|| {
