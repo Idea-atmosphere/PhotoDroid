@@ -911,6 +911,8 @@ fn blend(b: usvg::BlendMode) -> BlendMode {
         B::Saturation => BlendMode::Saturation,
         B::Color => BlendMode::Color,
         B::Luminosity => BlendMode::Luminosity,
+        // CSS plus-lighter is additive blending, equivalent to the project's Linear Dodge mode.
+        B::PlusLighter => BlendMode::LinearDodge,
     }
 }
 
