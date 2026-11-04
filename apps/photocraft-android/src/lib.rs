@@ -4,8 +4,10 @@
 //! NativeActivity backend. This crate provides what the desktop shell does natively:
 //!
 //! - file access through the system file picker (Storage Access Framework) and saves to
-//!   `Downloads/PhotoCraft` (MediaStore), both through `PhotoCraftActivity` (Java; see `platform`);
-//! - app-private storage for preferences, crash recovery and brush presets;
+//!   `Download/PhotoCraft` (MediaStore), both through `PhotoCraftActivity` (Java; see `platform`);
+//! - app-private storage for preferences, crash recovery and brush presets, plus public
+//!   `Download/PhotoCraft/Fonts` and `Download/PhotoCraft/log` folders. A persisted SAF grant lets
+//!   the activity mirror user fonts into private staging; logs go through MediaStore;
 //! - the system bars and soft keyboard, which the UI keeps clear of (`shell`).
 //!
 //! The pieces that don't need Android (the protocol text, the saved-layout check, the crash guard, the crash

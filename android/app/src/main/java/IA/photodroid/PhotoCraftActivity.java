@@ -3,10 +3,12 @@ package IA.photodroid;
 import android.app.Dialog;
 import android.app.NativeActivity;
 import android.content.ContentResolver;
+import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.UriPermission;
 import android.content.res.Resources;
 import android.database.Cursor;
 import android.graphics.Color;
@@ -20,6 +22,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.LocaleList;
 import android.os.ParcelFileDescriptor;
+import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.DisplayMetrics;
@@ -42,6 +45,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -64,14 +68,20 @@ import java.util.concurrent.atomic.AtomicLong;
  *                                           gave no descriptor)
  *            "error" SEP name SEP message   (a picked file that couldn't be copied)
  *            "done"                         (the picker session is over)
+ *            "fonts"                        (Download/PhotoCraft access was granted)
  *            one event per "poll"; "" when none is waiting
  */
 public class PhotoCraftActivity extends NativeActivity {
     private static final char SEP = '\u001f';
     private static final int REQUEST_OPEN = 0x5043;
+    private static final int REQUEST_USER_TREE = 0x5044;
     private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/PhotoCraft";
+    private static final String LOG_FOLDER = EXPORT_FOLDER + "/log";
+    private static final String FONT_FOLDER = EXPORT_FOLDER + "/Fonts";
+    private static final String EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents";
     private static final String PREFS_NAME = "photodroid_prefs";
     private static final String KEY_DONT_SHOW_WELCOME = "dont_show_donate_dialog";
+    private static final String KEY_USER_TREE = "photocraft_download_tree";
     private static final String DONATE_URL = "https://idea-atmosphere.github.io/Nothing/designs/minimal.html";
 
     private static volatile boolean welcomeShownInProcess = false;
@@ -129,6 +139,17 @@ public class PhotoCraftActivity extends NativeActivity {
         refreshInsets();
         // Picked files that an earlier run didn't get to are stale now.
         deleteTree(new File(getCacheDir(), "open"));
+
+        // MediaStore creates the public folders without a storage permission. Reading fonts that
+        // another app put there needs a persisted SAF grant for Download/PhotoCraft only.
+        io.execute(() -> {
+            try {
+                ensureUserFolders();
+            } catch (Exception e) {
+                events.add(join("error", "", "PhotoCraft folders could not be prepared: " + describe(e)));
+            }
+            runOnUiThread(this::requestUserFolderAccess);
+        });
 
         // Show the welcome & donation popup on startup unless permanently dismissed.
         decorView.post(this::maybeShowWelcomePopup);
@@ -452,7 +473,11 @@ public class PhotoCraftActivity extends NativeActivity {
                     }
                     return ok(insetDiag);
                 case "save":
-                    return ok(save(argument));
+                    return ok(save(argument, EXPORT_FOLDER));
+                case "save_log":
+                    return ok(save(argument, LOG_FOLDER));
+                case "sync_fonts":
+                    return ok(syncFonts(argument));
                 case "delete_logs":
                     return ok(deleteLogs(argument));
                 case "url":
@@ -486,10 +511,86 @@ public class PhotoCraftActivity extends NativeActivity {
         });
     }
 
+    /** Ask once for read access to the exact public folder; the grant survives later launches. */
+    @SuppressWarnings("deprecation")
+    private void requestUserFolderAccess() {
+        if (hasUserFolderAccess()) {
+            return;
+        }
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().remove(KEY_USER_TREE).apply();
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        Uri initial = DocumentsContract.buildDocumentUri(
+                EXTERNAL_STORAGE_AUTHORITY,
+                "primary:" + EXPORT_FOLDER
+        );
+        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial);
+        try {
+            startActivityForResult(intent, REQUEST_USER_TREE);
+        } catch (RuntimeException e) {
+            events.add(join("error", "", "The PhotoCraft folder picker is unavailable: " + describe(e)));
+        }
+    }
+
+    private boolean hasUserFolderAccess() {
+        String saved = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_USER_TREE, "");
+        if (saved == null || saved.isEmpty()) {
+            return false;
+        }
+        Uri tree = Uri.parse(saved);
+        if (!isPhotoCraftTree(tree)) {
+            return false;
+        }
+        for (UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
+            if (permission.isReadPermission() && tree.equals(permission.getUri())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Do not silently bind font loading to a different folder if the user navigates elsewhere. */
+    private static boolean isPhotoCraftTree(Uri tree) {
+        try {
+            String id = DocumentsContract.getTreeDocumentId(tree);
+            return id != null && id.endsWith(":" + EXPORT_FOLDER);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private void onUserTreeResult(int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            events.add(join("error", "", "Fonts in Download/PhotoCraft/Fonts need access to the PhotoCraft folder."));
+            return;
+        }
+        Uri tree = data.getData();
+        if (!isPhotoCraftTree(tree)) {
+            events.add(join("error", "", "Select Download/PhotoCraft itself, not Download or another folder."));
+            return;
+        }
+        int read = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        if (read == 0) {
+            events.add(join("error", "", "The PhotoCraft folder did not grant read access."));
+            return;
+        }
+        try {
+            getContentResolver().takePersistableUriPermission(tree, read);
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putString(KEY_USER_TREE, tree.toString()).apply();
+            events.add("fonts");
+        } catch (RuntimeException e) {
+            events.add(join("error", "", "PhotoCraft folder access could not be kept: " + describe(e)));
+        }
+    }
+
     @Override
     @SuppressWarnings("deprecation")
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_USER_TREE) {
+            onUserTreeResult(resultCode, data);
+            return;
+        }
         if (requestCode != REQUEST_OPEN) {
             return;
         }
@@ -569,14 +670,218 @@ public class PhotoCraftActivity extends NativeActivity {
         return fileName(name == null || name.isEmpty() ? "picked file" : name);
     }
 
-    // ---- Saving (Downloads/PhotoCraft through MediaStore) ----
+    // ---- Public folders, fonts and saving (Download/PhotoCraft) ----
+
+    /** Create both visible folders even before the first font or diagnostic log exists. */
+    private void ensureUserFolders() throws IOException {
+        ensureMarker(
+                FONT_FOLDER,
+                "Put .ttf, .otf, .ttc and .otc font files here, then restart PhotoDroid.\n"
+        );
+        ensureMarker(
+                LOG_FOLDER,
+                "PhotoDroid writes photocraft-log.txt and unclean-run diagnostic logs here.\n"
+        );
+    }
+
+    /** A small app-owned readme is also an empty-directory marker in MediaStore Downloads. */
+    private void ensureMarker(String folder, String text) throws IOException {
+        ContentResolver resolver = getContentResolver();
+        String name = "README.txt";
+        String existing = findOwned(resolver, folder, name);
+        if (!existing.isEmpty()) {
+            // Also publish a marker left pending by a process kill during an earlier launch.
+            ContentValues published = new ContentValues();
+            published.put(MediaStore.Downloads.IS_PENDING, 0);
+            resolver.update(Uri.parse(existing), published, null, null);
+            return;
+        }
+        ContentValues pending = new ContentValues();
+        pending.put(MediaStore.Downloads.DISPLAY_NAME, name);
+        pending.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
+        pending.put(MediaStore.Downloads.RELATIVE_PATH, folder);
+        pending.put(MediaStore.Downloads.IS_PENDING, 1);
+        Uri row = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, pending);
+        if (row == null) {
+            throw new IOException("Downloads is not available");
+        }
+        try {
+            try (OutputStream out = resolver.openOutputStream(row, "wt")) {
+                if (out == null) {
+                    throw new IOException("could not create " + folder);
+                }
+                out.write(text.getBytes(StandardCharsets.UTF_8));
+            }
+            ContentValues published = new ContentValues();
+            published.put(MediaStore.Downloads.IS_PENDING, 0);
+            if (resolver.update(row, published, null, null) < 1) {
+                throw new IOException("could not finish " + folder);
+            }
+        } catch (IOException | RuntimeException e) {
+            try {
+                resolver.delete(row, null, null);
+            } catch (RuntimeException ignored) {
+            }
+            throw e;
+        }
+    }
+
+    /** Find a file owned by this app; other apps' Downloads rows are intentionally not queried. */
+    private static String findOwned(ContentResolver resolver, String folder, String name) {
+        try (Cursor cursor = resolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                new String[] {MediaStore.Downloads._ID},
+                MediaStore.Downloads.RELATIVE_PATH + " = ? AND " + MediaStore.Downloads.DISPLAY_NAME + " = ?",
+                new String[] {folder + "/", name},
+                null
+        )) {
+            if (cursor != null && cursor.moveToFirst()) {
+                long id = cursor.getLong(0);
+                return ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id).toString();
+            }
+        } catch (RuntimeException ignored) {
+            // An unavailable provider is reported by the subsequent insert/write if one is needed.
+        }
+        return "";
+    }
 
     /**
-     * Save the staged file under its name in Downloads/PhotoCraft. The argument is
+     * Mirror the SAF-granted public Fonts tree into private storage for the Rust font parser.
+     * Called on the native font worker, never on the UI thread. Build a complete new copy first so
+     * a failed provider read cannot leave a half-refreshed directory.
+     */
+    private synchronized String syncFonts(String argument) throws IOException {
+        String saved = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_USER_TREE, "");
+        if (saved == null || saved.isEmpty()) {
+            throw new IOException("grant access to Download/PhotoCraft to load user fonts");
+        }
+        Uri tree = Uri.parse(saved);
+        if (!isPhotoCraftTree(tree)) {
+            throw new IOException("the saved folder is not Download/PhotoCraft");
+        }
+        File target = new File(argument);
+        File parent = target.getParentFile();
+        if (parent == null) {
+            throw new IOException("invalid font staging path");
+        }
+        File next = new File(parent, target.getName() + ".next");
+        deleteTree(next);
+        if (!next.mkdirs()) {
+            throw new IOException("could not create the font staging directory");
+        }
+        try {
+            String fonts = findChildDirectory(tree, DocumentsContract.getTreeDocumentId(tree), "Fonts");
+            int count = fonts == null ? 0 : copyFontChildren(tree, fonts, next, 0);
+            deleteTree(target);
+            if (!next.renameTo(target)) {
+                throw new IOException("could not finish the font staging directory");
+            }
+            return Integer.toString(count);
+        } catch (IOException | RuntimeException e) {
+            deleteTree(next);
+            if (e instanceof IOException) {
+                throw (IOException) e;
+            }
+            throw new IOException(describe(e), e);
+        }
+    }
+
+    private String findChildDirectory(Uri tree, String parent, String wanted) throws IOException {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent);
+        try (Cursor cursor = getContentResolver().query(
+                children,
+                new String[] {
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                },
+                null,
+                null,
+                null
+        )) {
+            if (cursor == null) {
+                throw new IOException("the PhotoCraft folder could not be listed");
+            }
+            while (cursor.moveToNext()) {
+                String name = cursor.getString(1);
+                String mime = cursor.getString(2);
+                if (wanted.equalsIgnoreCase(name) && DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    return cursor.getString(0);
+                }
+            }
+        }
+        return null;
+    }
+
+    private int copyFontChildren(Uri tree, String parent, File target, int depth) throws IOException {
+        if (depth > 64) {
+            throw new IOException("the font directory is nested too deeply");
+        }
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent);
+        try (Cursor cursor = getContentResolver().query(
+                children,
+                new String[] {
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                },
+                null,
+                null,
+                null
+        )) {
+            if (cursor == null) {
+                throw new IOException("a font directory could not be listed");
+            }
+            int count = 0;
+            while (cursor.moveToNext()) {
+                String id = cursor.getString(0);
+                String name = cursor.getString(1);
+                String mime = cursor.getString(2);
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    File child = new File(target, stagingName(name, "Fonts"));
+                    if (!child.mkdirs() && !child.isDirectory()) {
+                        throw new IOException("could not create a font staging subdirectory");
+                    }
+                    count += copyFontChildren(tree, id, child, depth + 1);
+                } else if (isFontName(name)) {
+                    File output = new File(target, stagingName(name, "font"));
+                    Uri document = DocumentsContract.buildDocumentUriUsingTree(tree, id);
+                    try (InputStream in = getContentResolver().openInputStream(document)) {
+                        if (in == null) {
+                            throw new IOException("could not open " + stagingName(name, "font"));
+                        }
+                        try (OutputStream out = new FileOutputStream(output)) {
+                            copy(in, out);
+                        }
+                    }
+                    count++;
+                }
+            }
+            return count;
+        }
+    }
+
+    private static boolean isFontName(String name) {
+        if (name == null) {
+            return false;
+        }
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".ttf") || lower.endsWith(".otf")
+                || lower.endsWith(".ttc") || lower.endsWith(".otc");
+    }
+
+    /** A provider display name must not escape the private staging directory. */
+    private static String stagingName(String name, String fallback) {
+        String safe = fileName(name == null ? fallback : name);
+        return safe.isEmpty() || safe.equals(".") || safe.equals("..") ? fallback : safe;
+    }
+
+    /**
+     * Save the staged file under its name in the requested PhotoCraft subfolder. The argument is
      * name SEP mime SEP stagedPath SEP previousUri, where previousUri is the copy this name was
      * saved to last (empty if none). Returns the new copy's URI.
      */
-    private String save(String argument) throws IOException {
+    private String save(String argument, String folder) throws IOException {
         String[] fields = argument.split(String.valueOf(SEP), -1);
         if (fields.length != 4) {
             throw new IOException("malformed save request");
@@ -587,10 +892,15 @@ public class PhotoCraftActivity extends NativeActivity {
         String previous = fields[3];
 
         ContentResolver resolver = getContentResolver();
+        // The log must keep its stable name even if app-private preferences were cleared while the
+        // public files survived. Exports deliberately retain their old index-only behaviour.
+        if (previous.isEmpty() && LOG_FOLDER.equals(folder)) {
+            previous = findOwned(resolver, folder, name);
+        }
         ContentValues pending = new ContentValues();
         pending.put(MediaStore.Downloads.DISPLAY_NAME, name);
         pending.put(MediaStore.Downloads.MIME_TYPE, mime);
-        pending.put(MediaStore.Downloads.RELATIVE_PATH, EXPORT_FOLDER);
+        pending.put(MediaStore.Downloads.RELATIVE_PATH, folder);
         pending.put(MediaStore.Downloads.IS_PENDING, 1);
         Uri row = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, pending);
         if (row == null) {
@@ -631,9 +941,7 @@ public class PhotoCraftActivity extends NativeActivity {
         return row.toString();
     }
 
-    /**
-     * Removes any saved diagnostic log (.txt) files from Downloads/PhotoCraft when Debug is turned off.
-     */
+    /** Removes current and unclean-run logs from both the log folder and the legacy export folder. */
     private String deleteLogs(String argument) {
         ContentResolver resolver = getContentResolver();
         if (argument != null && !argument.isEmpty()) {
@@ -650,8 +958,16 @@ public class PhotoCraftActivity extends NativeActivity {
         try {
             resolver.delete(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    MediaStore.Downloads.DISPLAY_NAME + " LIKE ?",
-                    new String[] {"photocraft-log%"}
+                    "(" + MediaStore.Downloads.DISPLAY_NAME + " = ? OR "
+                            + MediaStore.Downloads.DISPLAY_NAME + " LIKE ?) AND ("
+                            + MediaStore.Downloads.RELATIVE_PATH + " = ? OR "
+                            + MediaStore.Downloads.RELATIVE_PATH + " = ?)",
+                    new String[] {
+                            "photocraft-log.txt",
+                            "photocraft-log-unclean-%.txt",
+                            EXPORT_FOLDER + "/",
+                            LOG_FOLDER + "/"
+                    }
             );
         } catch (RuntimeException ignored) {
         }
@@ -663,7 +979,8 @@ public class PhotoCraftActivity extends NativeActivity {
                 if (children != null) {
                     for (File child : children) {
                         String n = child.getName();
-                        if (n != null && n.startsWith("photocraft-log") && n.endsWith(".txt")) {
+                        if (n != null && (n.equals("photocraft-log.txt")
+                                || (n.startsWith("photocraft-log-unclean-") && n.endsWith(".txt")))) {
                             //noinspection ResultOfMethodCallIgnored
                             child.delete();
                         }

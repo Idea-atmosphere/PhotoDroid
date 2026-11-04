@@ -32,6 +32,8 @@ pub struct Runtime {
     saved_value: Option<Value>,
     save_retry: SaveRetry,
     next_autosave_ms: f64,
+    /// Earliest next on-change queue attempt after a failed write/queue operation, in milliseconds.
+    on_change_retry_ms: f64,
     /// Last revision whose recovery file was actually written successfully.
     autosaved: HashMap<DocId, u64>,
     /// Queued writes must not masquerade as durable snapshots.
@@ -533,7 +535,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         gpu.set_style(style);
         app.prefs_rt.gpu_style = Some(style);
     }
-    autosave(app);
+    autosave(app, ctx);
     #[cfg(not(target_arch = "wasm32"))]
     link_updates(app, ctx);
     history_log(app);
@@ -727,13 +729,19 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(wait));
 }
 
-/// Background autosave of documents with unsaved changes every N minutes (File Handling).
-fn autosave(app: &mut PhotocraftApp) {
+/// Background autosave of documents with unsaved changes every N minutes (File Handling), or on
+/// every changed revision for a mobile service that sets [`crate::Services::autosave_on_change`].
+fn autosave(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    const ON_CHANGE_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+    const ON_CHANGE_RETRY_MS: f64 = 2_000.0;
+
     let fh = &app.session.prefs().file_handling;
     let (on, minutes) = (fh.autosave, fh.autosave_minutes.max(1));
+    let on_change = app.services.autosave_on_change;
     if app.services.autosave.is_none() {
         return;
     }
+    let now = crate::gpu_canvas::now_ms();
     // A successful queue operation is not a successful disk write. Poll each frame,
     // including frames before the next autosave interval, so failures are visible.
     if let Some(results) = app.services.autosave_results.as_mut() {
@@ -746,16 +754,21 @@ fn autosave(app: &mut PhotocraftApp) {
             match result {
                 Ok(()) => {
                     app.prefs_rt.autosaved.insert(id, revision);
+                    if on_change && app.prefs_rt.on_change_retry_ms <= now {
+                        app.prefs_rt.on_change_retry_ms = 0.0;
+                    }
                 }
                 Err(e) => {
                     let template = "Autosave failed: {error}";
                     app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
                     app.ui.status_error = true;
+                    if on_change {
+                        app.prefs_rt.on_change_retry_ms = now + ON_CHANGE_RETRY_MS;
+                    }
                 }
             }
         }
     }
-    let now = crate::gpu_canvas::now_ms();
     // Saved or closed documents drop their recovery data.
     let live: HashMap<DocId, bool> = app.session.documents().iter().map(|d| (d.doc.id, d.is_dirty())).collect();
     let mut stale: Vec<DocId> = app.prefs_rt.autosaved.keys().filter(|id| live.get(id) != Some(&true)).copied().collect();
@@ -770,15 +783,27 @@ fn autosave(app: &mut PhotocraftApp) {
     if !on {
         return;
     }
-    let interval = minutes as f64 * 60_000.0;
-    if app.prefs_rt.next_autosave_ms == 0.0 || app.prefs_rt.next_autosave_ms > now + interval {
+    if on_change {
+        if now < app.prefs_rt.on_change_retry_ms {
+            if app.prefs_rt.autosave_pending.is_empty() {
+                let wait = app.prefs_rt.on_change_retry_ms - now;
+                ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait / 1000.0).unwrap_or(ON_CHANGE_POLL));
+            } else {
+                ctx.request_repaint_after(ON_CHANGE_POLL);
+            }
+            return;
+        }
+    } else {
+        let interval = minutes as f64 * 60_000.0;
+        if app.prefs_rt.next_autosave_ms == 0.0 || app.prefs_rt.next_autosave_ms > now + interval {
+            app.prefs_rt.next_autosave_ms = now + interval;
+            return;
+        }
+        if now < app.prefs_rt.next_autosave_ms {
+            return;
+        }
         app.prefs_rt.next_autosave_ms = now + interval;
-        return;
     }
-    if now < app.prefs_rt.next_autosave_ms {
-        return;
-    }
-    app.prefs_rt.next_autosave_ms = now + interval;
     let jobs: Vec<_> = app
         .session
         .documents()
@@ -801,8 +826,23 @@ fn autosave(app: &mut PhotocraftApp) {
                     let template = "Autosave failed: {error}";
                     app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
                     app.ui.status_error = true;
+                    if on_change {
+                        app.prefs_rt.on_change_retry_ms = now + ON_CHANGE_RETRY_MS;
+                        break;
+                    }
                 }
             }
+        }
+    }
+    if on_change {
+        if app.prefs_rt.autosave_pending.is_empty() {
+            if app.prefs_rt.on_change_retry_ms > now {
+                let wait = app.prefs_rt.on_change_retry_ms - now;
+                ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait / 1000.0).unwrap_or(ON_CHANGE_POLL));
+            }
+        } else {
+            // Only a pending write needs fast polling; an idle document does not keep waking the UI.
+            ctx.request_repaint_after(ON_CHANGE_POLL);
         }
     }
 }
@@ -4710,6 +4750,29 @@ mod tests {
         autosave_now(&mut app);
         tick(&mut app, &ctx);
         assert_eq!(saved.lock().unwrap().len(), 2, "autosave off");
+    }
+
+    #[test]
+    fn on_change_autosave_does_not_wait_for_the_interval() {
+        type Saved = Arc<Mutex<Vec<(u64, u64)>>>;
+        let saved: Saved = Arc::default();
+        let sink = saved.clone();
+        let services = crate::Services {
+            autosave: Some(Box::new(move |doc: &Arc<photocraft_doc::Document>, rev: u64, _path: Option<&str>| {
+                sink.lock().unwrap().push((doc.id.0, rev));
+                Ok(())
+            })),
+            autosave_on_change: true,
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        tick(&mut app, &ctx);
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        // No autosave_now: the mobile service must bypass the minutes timer on this upkeep pass.
+        tick(&mut app, &ctx);
+        assert_eq!(saved.lock().unwrap().len(), 1);
     }
 
     #[test]

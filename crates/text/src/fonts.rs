@@ -285,6 +285,35 @@ impl FontDb {
         }
     }
 
+    /// Loads every supported font file below `dir` (TTF/OTF/TTC/OTC, including nested folders).
+    /// Returns the number of candidate files offered to the font parser; unreadable or invalid
+    /// files are skipped by fontique and do not prevent the other fonts from loading.
+    ///
+    /// Registration clears the PostScript/face caches and bumps the shared generation, so an
+    /// already-open font menu notices families that arrived from an app-specific font folder.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load_font_dir(&mut self, dir: &std::path::Path) -> usize {
+        let mut files = Vec::new();
+        collect_font_files(dir, 0, &mut files);
+        files.sort();
+        files.dedup();
+        let count = files.len();
+        if count == 0 {
+            return 0;
+        }
+        for path in files {
+            self.fcx.collection.load_fonts_from_paths([path]);
+        }
+        self.ps_cache.clear();
+        self.face_cache.clear();
+        self.refresh_generics();
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+        if self.shared {
+            SHARED_GENERATION.fetch_add(1, Ordering::Relaxed);
+        }
+        count
+    }
+
     /// Registers font data (TTF/OTF, or every face of a TTC/OTC). Returns the family names added.
     pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
         self.register_blob(Blob::new(Arc::new(bytes)), None)
@@ -1147,6 +1176,24 @@ mod tests {
         let mut files = Vec::new();
         super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, &mut files);
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn a_user_font_directory_loads_supported_files_recursively() {
+        let dir = std::env::temp_dir().join(format!("photocraft-user-fonts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.join("inter.TTF"), super::INTER_REGULAR.as_slice()).unwrap();
+        std::fs::write(nested.join("mono.otf"), super::JETBRAINS_MONO_REGULAR.as_slice()).unwrap();
+        std::fs::write(nested.join("notes.txt"), b"not a font").unwrap();
+
+        let mut db = super::FontDb::new();
+        assert_eq!(db.load_font_dir(&dir), 2, "only font extensions are offered to the parser");
+        assert!(db.has_family("Inter"));
+        assert!(db.has_family("JetBrains Mono"));
+        assert_eq!(db.load_font_dir(&dir.join("missing")), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

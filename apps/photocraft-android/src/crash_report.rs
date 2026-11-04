@@ -1,8 +1,8 @@
 //! Keeps the diagnostic log through a crash. The log lives in memory, and the Help menu (and a periodic save) writes it
-//! to `Downloads/PhotoCraft/photocraft-log.txt`. A panic or a kill can come before that write, so the log is also
+//! to `Download/PhotoCraft/log/photocraft-log.txt`. A panic or a kill can come before that write, so the log is also
 //! copied to app-private storage each time it is saved, and at a panic. A run marks itself as running at launch and
 //! clears the mark when the app is dropped. A launch that finds the mark has no copy of a run that ended normally, so
-//! the last copy is saved to Downloads under a name that says the run ended early.
+//! the last copy is saved beside the current log under a name that says the run ended early.
 //!
 //! These are plain file operations, so they run under `cargo test` on any host.
 
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// The name the log has in Downloads (the Help menu's Save Diagnostic Log).
+/// The name the log has in `Download/PhotoCraft/log` (the Help menu's Save Diagnostic Log).
 pub const LOG_NAME: &str = "photocraft-log.txt";
 /// The copy of the log in app-private storage.
 const LAST_COPY: &str = "last-log.txt";
@@ -82,7 +82,7 @@ pub fn save_cpu_cores(root: &Path, cores: usize) {
     let _ = std::fs::write(root.join(CPU_CORES), cores.to_string().as_bytes());
 }
 
-/// The name a log from a run that did not end normally is saved as in Downloads.
+/// The name a log from a run that did not end normally is saved as in the `log` folder.
 pub fn unclean_name(seconds: u64) -> String {
     format!("photocraft-log-unclean-{seconds}.txt")
 }

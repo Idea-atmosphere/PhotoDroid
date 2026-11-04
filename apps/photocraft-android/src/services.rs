@@ -2,7 +2,7 @@
 //!
 //! Files come in through the system file picker: the activity hands each picked file over (as a
 //! descriptor, or as a copy in app cache) and a reader thread puts its bytes in [`Link::inbox`],
-//! for the UI to open. The UI thread never reads a file itself. Saves go to `Downloads/PhotoCraft`
+//! for the UI to open. The UI thread never reads a file itself. Saves go to `Download/PhotoCraft`
 //! through MediaStore (see `PhotoCraftActivity.save`). Preferences, crash recovery and brush
 //! presets live in app-private storage. Anything that needs a desktop facility is left `None`, so
 //! the UI hides or skips it, as it does on the web.
@@ -22,7 +22,10 @@ use photocraft_ui_egui::{ExportSettings, FileDialogAnswer, FileDialogFn, FileDia
 use crate::platform;
 use crate::protocol;
 
-/// App-private storage: the files directory the system gives the app, and what lives in it.
+/// Storage used by the Android shell. Recovery, preferences and the temporary font copy stay in
+/// app-private internal storage. The activity mirrors user fonts from `Download/PhotoCraft/Fonts`
+/// into [`Dirs::fonts`], and publishes diagnostic logs to `Download/PhotoCraft/log` through
+/// MediaStore; neither operation needs a broad storage permission.
 #[derive(Clone)]
 pub struct Dirs {
     root: PathBuf,
@@ -35,6 +38,12 @@ impl Dirs {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Private staging copy of the user's public TTF/OTF/TTC/OTC files. The activity refreshes it
+    /// on a worker before the Text tool registers this directory.
+    pub fn fonts(&self) -> PathBuf {
+        self.root.join("Fonts")
     }
 
     pub fn presets(&self) -> PathBuf {
@@ -119,7 +128,7 @@ fn locked<T>(queue: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// The file dialog service (`Services::file_dialog`). Save has no dialog: the suggested name is
-/// used, in Downloads/PhotoCraft. File › Open starts the system picker, and the files it picks come
+/// used, in Download/PhotoCraft. File › Open starts the system picker, and the files it picks come
 /// back through the inbox to be opened there, so the dialog is answered as cancelled at once. A
 /// command that reads one file (place, scripts, presets, notes) would otherwise open it as a new
 /// document, so it gets a message instead and is cancelled.
@@ -140,7 +149,8 @@ fn file_dialog(link: Link) -> FileDialogFn {
 /// Builds the services for one launch. `link` is the same one the shell polls.
 pub fn services(dirs: &Dirs, link: &Link) -> Services {
     let store: SharedRecovery = Rc::new(RefCell::new(Some(RecoveryStore::new(dirs.recovery()))));
-    let (autosave_store, results_store, discard_store, adopt_store) = (store.clone(), store.clone(), store.clone(), store);
+    let (autosave_store, results_store, flush_store, discard_store, adopt_store) =
+        (store.clone(), store.clone(), store.clone(), store.clone(), store);
     let recovery_dir = dirs.recovery();
     let saver = Rc::new(Saver::new(dirs.staging(), dirs.export_index()));
     let saver_for_debug = saver.clone();
@@ -155,15 +165,22 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
         export: Some(Box::new(export_document)),
         file_dialog: Some(file_dialog(link.clone())),
         write: Some(Box::new(move |path: &str, bytes: &[u8]| {
-            // The diagnostic log keeps a copy in app-private storage too, for a crash (see `crash_report`).
-            if path == crate::crash_report::LOG_NAME && photocraft_doc::diag::enabled() {
-                crate::crash_report::keep_copy(bytes);
+            let name = protocol::file_name(path);
+            if is_diagnostic_log(&name) {
+                // Keep a second private copy for an unclean shutdown; publish the readable log in
+                // Download/PhotoCraft/log without sending ordinary .txt exports there.
+                if name == crate::crash_report::LOG_NAME && photocraft_doc::diag::enabled() {
+                    crate::crash_report::keep_copy(bytes);
+                }
+                return saver.save_log(&name, bytes);
             }
             saver.save(path, bytes)
         })),
         set_debug_log: Some(Box::new(move |enabled: bool| {
             crate::crash_report::set_debug_enabled(&debug_root, enabled);
             if !enabled {
+                // Remove logs in Download/PhotoCraft/log and logs written by older versions into
+                // the export folder itself.
                 saver_for_debug.remove_logs()?;
             }
             Ok(())
@@ -188,7 +205,11 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
         autosave: Some(Box::new(move |doc: &Arc<Document>, revision: u64, path: Option<&str>| {
             with_store(&autosave_store, |s| s.autosave_checked(doc, revision, path.map(str::to_string))).and_then(|queued| queued)
         })),
+        // Android must not wait ten minutes for crash recovery: each changed revision is queued
+        // on its next upkeep pass, while the incremental background writer coalesces rapid edits.
+        autosave_on_change: true,
         autosave_results: Some(Box::new(move || with_store(&results_store, |s| s.take_completed()).unwrap_or_default())),
+        flush_autosaves: Some(Box::new(move || with_store(&flush_store, |s| s.flush()).unwrap_or_default())),
         discard_autosave: Some(Box::new(move |id: u64| {
             let _ = with_store(&discard_store, |s| s.discard(id));
         })),
@@ -242,8 +263,21 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
-/// Saves exports into `Downloads/PhotoCraft`. It remembers the copy each name was saved to, so a
-/// second save of the same name replaces that copy instead of adding "name (1)".
+/// Only the app's own diagnostic names go to `log`; a document export never changes destination
+/// merely because it is a `.txt` file.
+fn is_diagnostic_log(name: &str) -> bool {
+    name == crate::crash_report::LOG_NAME || (name.starts_with("photocraft-log-unclean-") && name.ends_with(".txt"))
+}
+
+/// Index keys for published logs carry their subdirectory; legacy root-level log keys have no
+/// prefix. Ordinary text exports must never be treated as diagnostics.
+fn is_diagnostic_log_key(key: &str) -> bool {
+    is_diagnostic_log(key.strip_prefix("log/").unwrap_or(key))
+}
+
+/// Saves exports into `Download/PhotoCraft` and diagnostic logs into its `log` subdirectory. It
+/// remembers the copy each key was saved to, so a second save replaces that copy instead of
+/// adding "name (1)". Log keys have a `log/` prefix so they cannot collide with a document export.
 struct Saver {
     staging: PathBuf,
     index: PathBuf,
@@ -258,15 +292,23 @@ impl Saver {
 
     fn save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let name = protocol::file_name(path);
-        let previous = self.saved.borrow().get(&name).cloned().unwrap_or_default();
+        self.save_as("save", &name, &name, bytes)
+    }
+
+    fn save_log(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        self.save_as("save_log", &format!("log/{name}"), name, bytes)
+    }
+
+    fn save_as(&self, command: &str, key: &str, name: &str, bytes: &[u8]) -> Result<(), String> {
+        let previous = self.saved.borrow().get(key).cloned().unwrap_or_default();
         // The activity copies from a file, so the bytes are staged in app-private storage first.
-        let staged = self.stage(&name, bytes)?;
+        let staged = self.stage(name, bytes)?;
         let staged_path = staged.to_string_lossy().into_owned();
-        let argument = protocol::join_fields(&[name.as_str(), protocol::mime_type(&name), staged_path.as_str(), previous.as_str()]);
-        let reply = platform::call("save", &argument);
+        let argument = protocol::join_fields(&[name, protocol::mime_type(name), staged_path.as_str(), previous.as_str()]);
+        let reply = platform::call(command, &argument);
         let _ = std::fs::remove_file(&staged);
         let uri = protocol::parse_reply(&reply?).map_err(|e| format!("{name} could not be saved: {e}"))?;
-        self.saved.borrow_mut().insert(name, uri);
+        self.saved.borrow_mut().insert(key.to_string(), uri);
         let index = protocol::format_index(&self.saved.borrow());
         if let Err(e) = write_atomic(&self.index, index.as_bytes()) {
             log::warn!("could not remember where exports were saved: {e}");
@@ -289,7 +331,7 @@ impl Saver {
             let mut saved = self.saved.borrow_mut();
             let log_keys: Vec<String> = saved
                 .keys()
-                .filter(|k| *k == crate::crash_report::LOG_NAME || k.starts_with("photocraft-log-unclean-"))
+                .filter(|k| is_diagnostic_log_key(k))
                 .cloned()
                 .collect();
             for key in log_keys {
@@ -336,6 +378,16 @@ mod tests {
         let restarted = Saver::new(dir.join("staging"), index);
         assert_eq!(restarted.saved.borrow().get("cat.psd").map(String::as_str), Some("content://media/external_primary/downloads/7"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_diagnostic_log_index_keys_are_cleaned_up() {
+        assert!(is_diagnostic_log_key("log/photocraft-log.txt"));
+        assert!(is_diagnostic_log_key("log/photocraft-log-unclean-42.txt"));
+        assert!(is_diagnostic_log_key("photocraft-log.txt"), "legacy root-level logs are included");
+        assert!(!is_diagnostic_log_key("notes.txt"));
+        assert!(!is_diagnostic_log_key("log/README.txt"));
+        assert!(!is_diagnostic_log_key("log/photocraft-log-notes.txt"));
     }
 
     #[test]

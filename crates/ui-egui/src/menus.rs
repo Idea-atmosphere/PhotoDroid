@@ -2318,14 +2318,14 @@ mod quick_export_label_tests {
     }
 }
 
-/// The file the diagnostic log is saved as, in `Downloads/PhotoCraft` (see [`save_diagnostic_log`]).
+/// The file the diagnostic log is saved as, in `Download/PhotoCraft/log` (see [`save_diagnostic_log`]).
 const DIAGNOSTIC_LOG: &str = "photocraft-log.txt";
 
 /// Help › Save Diagnostic Log: the kept lines of `photocraft_doc::diag` go to [`DIAGNOSTIC_LOG`], through the
-/// save service (`Downloads/PhotoCraft` on the phone). The item is listed on the phone build only.
+/// save service (`Download/PhotoCraft/log` on the phone). The item is listed on the phone build only.
 fn save_diagnostic_log(app: &mut PhotocraftApp) -> Result<Value, String> {
     let lines = write_diagnostic_log(app)?;
-    app.ui.status = format!("Diagnostic log saved as {DIAGNOSTIC_LOG}");
+    app.ui.status = format!("Diagnostic log saved as log/{DIAGNOSTIC_LOG}");
     Ok(json!({"file": DIAGNOSTIC_LOG, "lines": lines}))
 }
 
@@ -2348,7 +2348,7 @@ fn log_save_due(since: Option<std::time::Duration>) -> bool {
     since.is_none_or(|s| s >= LOG_SAVE_EVERY)
 }
 
-/// Writes the log to `Downloads/PhotoCraft/photocraft-log.txt` shortly after it changes, so that a change's lines are in
+/// Writes the log to `Download/PhotoCraft/log/photocraft-log.txt` shortly after it changes, so that a change's lines are in
 /// the file without a trip to the menu. Phone only: the desktop keeps no log, and has no save service here.
 pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !photocraft_doc::diag::enabled() || app.services.write.is_none() || !photocraft_doc::diag::take_dirty() {
@@ -2373,7 +2373,7 @@ pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) 
 }
 
 /// Toggles diagnostic `.txt` logging from the phone menu. Turning it on starts recording and immediately
-/// saves `Downloads/PhotoCraft/photocraft-log.txt`; turning it off stops recording, clears the in-memory log,
+/// saves `Download/PhotoCraft/log/photocraft-log.txt`; turning it off stops recording, clears the in-memory log,
 /// and asks the platform service to remove any saved diagnostic `.txt` files.
 pub(crate) fn set_diagnostic_debug(app: &mut PhotocraftApp, enabled: bool) {
     if enabled {
@@ -2400,7 +2400,7 @@ pub(crate) fn set_diagnostic_debug(app: &mut PhotocraftApp, enabled: bool) {
             match write_diagnostic_log(app) {
                 Ok(lines) => {
                     photocraft_doc::diag::note_quiet(move || format!("log saved: {lines} lines"));
-                    app.ui.status = format!("Diagnostic log saved as {DIAGNOSTIC_LOG}");
+                    app.ui.status = format!("Diagnostic log saved as log/{DIAGNOSTIC_LOG}");
                 }
                 Err(e) => log::warn!("the diagnostic log could not be saved: {e}"),
             }
@@ -2448,7 +2448,7 @@ mod diagnostic_log_tests {
         assert_eq!(saved[0].0, "photocraft-log.txt");
         assert!(String::from_utf8_lossy(&saved[0].1).starts_with("PhotoCraft diagnostic log"), "the header leads the file");
         assert_eq!(result["file"], "photocraft-log.txt");
-        assert!(app.ui.status.contains("photocraft-log.txt"), "the status line says where it went");
+        assert!(app.ui.status.contains("log/photocraft-log.txt"), "the status line says where it went");
     }
 
     #[test]
