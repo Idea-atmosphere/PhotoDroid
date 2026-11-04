@@ -650,6 +650,9 @@ pub struct Services {
     pub xwayland_command: Option<String>,
     /// Crash-recovery autosave (Preferences › File Handling) and recovery at launch.
     pub autosave: Option<AutosaveFn>,
+    /// Queue every dirty revision on its next upkeep pass instead of waiting for the minutes
+    /// interval. Intended for mobile shells where the OS can kill the process without warning.
+    pub autosave_on_change: bool,
     /// None for services that report synchronous success through `autosave`.
     pub autosave_results: Option<AutosaveResultsFn>,
     /// Finish every queued crash-recovery autosave and wait for it, with outcomes like

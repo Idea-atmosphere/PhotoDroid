@@ -6,7 +6,8 @@
 (upstream commit `cece50d5`, synced from `2a952f16`; see [Upstream sync](#upstream-sync)). The Rust engine, the file codecs, and the egui interface are the same
 code as the desktop app. What changes is the shell: instead of a winit window with native dialogs,
 the app runs inside an Android `NativeActivity`, with the system file picker, MediaStore for saves,
-and app-private storage for preferences, crash recovery and brush presets.
+app-private storage for preferences, crash recovery and brush presets, and public
+`Download/PhotoCraft/Fonts` and `Download/PhotoCraft/log` folders.
 
 > **Status:** CI builds the arm64 library and an installable debug APK, and the host tests pass.
 > The app has **not** been run on a device or an emulator yet, so its behaviour on Android is
@@ -28,7 +29,8 @@ The shared crates match upstream `cece50d5` (synced from `2a952f16`). All upstre
 
 The shared crates are changed only where Android needs it, in a few small places:
 
-- `crates/text/src/fonts.rs` scans `/system/fonts` on Android;
+- `crates/text/src/fonts.rs` scans `/system/fonts` on Android and can register the private staging
+  copy of the user's public font directory, including nested TTF/OTF/TTC/OTC files;
 - `crates/ui-egui/src/gpu_canvas.rs` reads the physical memory on Android as on Linux;
 - `crates/ui-egui/Cargo.toml` leaves eframe's `accesskit` feature out of the Android build;
 - `crates/ui-egui/src/mobile.rs` (new) is the phone layout. It is used only when the shell sets
@@ -88,8 +90,8 @@ The shared crates are changed only where Android needs it, in a few small places
   4000). The engine writes one for each text edit (the damage, the effects' reach, the re-render's
   pixels: `type_cmds.rs`), the canvas writes one for the repaint that follows (`canvas.rs`), and a text
   layer's effect key is written when it changes (`compose/src/lib.rs`). The log is on only in the phone
-  build (`lib.rs`). While it changes, it is written to `Downloads/PhotoCraft/photocraft-log.txt` at once and then at most
-  every two seconds (`menus.rs`, `tick_diagnostic_log`). Help › Save Diagnostic Log (listed on the phone only)
+  build (`lib.rs`). While it changes, it is written to `Download/PhotoCraft/log/photocraft-log.txt` at once and then
+  at most every two seconds (`menus.rs`, `tick_diagnostic_log`). Help › Save Diagnostic Log (listed on the phone only)
   saves it at once. `record_panic` puts a panic in the log without waiting for its lock (the panic hook uses it).
 - `crates/engine/src/jobs.rs` writes an open's lines to the same log: the bytes read, the decode's time and
   the document's size, layers and text layers, each import warning (20 at most), and the failure or the
@@ -105,11 +107,35 @@ The shared crates are changed only where Android needs it, in a few small places
   origin (only for that signature; other PSDs are not changed). The one change of ours is a diagnostic line
   in that fold, which the log notes.
 
+## App folders, user fonts and continuous recovery
+
+At startup PhotoDroid creates these folders through MediaStore:
+
+- `Download/PhotoCraft/Fonts/`: put `.ttf`, `.otf`, `.ttc` or `.otc` files here, including inside
+  nested folders. A small `README.txt` marks the folder before the first font is added. Because a
+  file manager's fonts are not owned by PhotoDroid, the system picker asks for read access to the
+  **PhotoCraft** folder: select that folder itself, not all of Download. The grant is persisted for
+  later launches; no all-files storage permission is requested. The activity mirrors the fonts to a
+  private staging directory and loads them in the background, leaving the originals untouched. Their
+  internal family/style names appear in the Text tool's font menus. Restart after adding or replacing
+  fonts. Exports and logs still work if the font-folder grant is declined.
+- `Download/PhotoCraft/log/`: the current `photocraft-log.txt` and any
+  `photocraft-log-unclean-*.txt` from a run that did not end normally are written here through
+  MediaStore. A small `README.txt` marks this folder too. Turning diagnostic logging off removes only
+  the app's diagnostic logs, not this readme or ordinary text exports.
+
+Crash recovery no longer waits for the ten-minute default interval on Android. Every changed document
+revision is queued on the next UI upkeep pass and written incrementally in the background. If edits
+arrive faster than the writer, intermediate queued snapshots are coalesced and the newest complete
+snapshot wins. Failed writes retry after two seconds rather than spinning. A normal exit flushes
+pending writes; recovered documents are offered at launch. The existing **Save recovery information**
+preference still controls whether recovery is enabled.
+
 ## Diagnostic log
 
 The phone keeps a log of what the app does (`crates/doc/src/diag.rs`, plus the lines the app writes in
-`apps/photocraft-android/src/`). It is in `Downloads/PhotoCraft/photocraft-log.txt`, written as it changes, and
-Help › Save Diagnostic Log saves it at once. The log has:
+`apps/photocraft-android/src/`). It is in `Download/PhotoCraft/log/photocraft-log.txt`, written as it changes,
+and Help › Save Diagnostic Log saves it at once. The log has:
 
 - the start of each run, with the version;
 - each open: the bytes read, the decode's time, the size, the layers and text layers, the warnings, and the
@@ -122,7 +148,7 @@ Help › Save Diagnostic Log saves it at once. The log has:
 
 A crash can come before a save, so the log's latest copy is also kept in app-private storage (`last-log.txt`),
 written with each save and at a panic. A run marks itself as running at launch and clears the mark when the app
-is dropped. A launch that finds the mark, and no clean end, saves that copy to Downloads as
+is dropped. A launch that finds the mark, and no clean end, saves that copy in the same `log/` folder as
 `photocraft-log-unclean-<seconds>.txt` (`crash_report.rs`). A process that was killed without ending its run
 also produces such a file, so it is not proof of a crash.
 
@@ -130,7 +156,7 @@ also produces such a file, so it is not proof of a crash.
 
 - Launch, touch editing, the full interface.
 - **File › Open** (and Open As) through the Storage Access Framework. Several files can be picked.
-- **Save**, **Save As** and **Export** write to `Downloads/PhotoCraft` through MediaStore. Saving
+- **Save**, **Save As** and **Export** write to `Download/PhotoCraft` through MediaStore. Saving
   the same name again replaces the copy this app wrote earlier.
 - Preferences, crash recovery (autosave and restore) and brush presets live in app-private storage.
 - Links (Help, and so on) open in the browser.
@@ -141,7 +167,7 @@ also produces such a file, so it is not proof of a crash.
 
 - Placing files (Place Embedded/Linked), scripts, presets import and notes import need a
   synchronous file picker, which Android doesn't have. They show a message and do nothing.
-- Save doesn't ask for a location. Everything goes to `Downloads/PhotoCraft`. A document opened
+- Save doesn't ask for a location. Everything goes to `Download/PhotoCraft`. A document opened
   from elsewhere is saved as a new file there; it doesn't write back to its original location.
 - Clipboard images, the stylus tilt and eraser (touch force only), and the displays' colour profiles
   are not wired up.

@@ -31,6 +31,7 @@ photocraft-doc = { workspace = true }
 photocraft-engine = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-io = { workspace = true }
+photocraft-text = { workspace = true }
 photocraft-ui-egui = { workspace = true }
 # No `accesskit`: eframe rejects it with the NativeActivity backend (see ui-egui/Cargo.toml).
 eframe = { workspace = true, features = ["wgpu", "persistence", "android-native-activity"] }

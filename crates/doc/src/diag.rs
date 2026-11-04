@@ -3,7 +3,7 @@
 //! in memory for the user to save. It is off unless a build turns it on (the phone build does), so the desktop
 //! app records nothing.
 //!
-//! The phone's Help › Save Diagnostic Log writes [`dump`] to `Downloads/PhotoCraft/photocraft-log.txt`.
+//! The phone's Help › Save Diagnostic Log writes [`dump`] to `Download/PhotoCraft/log/photocraft-log.txt`.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};

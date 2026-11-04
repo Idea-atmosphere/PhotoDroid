@@ -25,14 +25,19 @@ const SETTLE_TIME: Duration = Duration::from_secs(3);
 pub fn run(app: AndroidApp) {
     android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("PhotoCraft"));
     crate::crash_guard::install_hook(record_panic);
-    // The system font scan can take seconds: run it off the UI thread.
-    photocraft_ui_egui::type_tool::warm_fonts();
     let Some(root) = app.internal_data_path() else {
         log::error!("PhotoCraft has no app-private storage, so it can't start");
         return;
     };
     platform::set_activity(app.activity_as_ptr());
     let dirs = Dirs::new(root);
+    // The activity creates Download/PhotoCraft/Fonts and Download/PhotoCraft/log through
+    // MediaStore. A persisted, user-granted SAF tree lets its font worker read files that a file
+    // manager placed there; no broad all-files permission is requested.
+    log::info!("PhotoCraft user folder: Download/PhotoCraft");
+    // The system font scan can take seconds: run it off the UI thread. The user folder is loaded
+    // on a second worker once the shared engine exists (see `warm_user_fonts`).
+    photocraft_ui_egui::type_tool::warm_fonts();
     crash_report::set_root(dirs.root());
     let shell_root = dirs.root().to_path_buf();
     // eframe restores the saved window and panel layout before our code runs; drop a layout that
@@ -47,6 +52,9 @@ pub fn run(app: AndroidApp) {
         options,
         Box::new(move |cc| {
             let link = Link::new(cc.egui_ctx.clone());
+            let font_dir = dirs.fonts();
+            warm_user_fonts(font_dir.clone(), cc.egui_ctx.clone());
+            let font_ctx = cc.egui_ctx.clone();
             let svc = services::services(&dirs, &link);
             PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
             let mut photo = PhotocraftApp::new(Session::new(), svc);
@@ -75,7 +83,7 @@ pub fn run(app: AndroidApp) {
                         photocraft_doc::cpu::diag_summary()
                     )
                 });
-                // A run that did not end normally left its log (see `crash_report`): save it to Downloads now.
+                // A run that did not end normally left its log (see `crash_report`): save it in log/ now.
                 if let Some((name, bytes)) = crash_report::begin(dirs.root()) {
                     let saved = photo.services.write.as_mut().map(|write| write(name.as_str(), bytes.as_slice()));
                     match saved {
@@ -99,6 +107,8 @@ pub fn run(app: AndroidApp) {
                 frame_started: None,
                 frame_work: Duration::ZERO,
                 root: shell_root,
+                font_dir,
+                font_ctx,
                 last_insets_px: [0; 4],
                 last_insets_diag: String::new(),
             }))
@@ -106,6 +116,30 @@ pub fn run(app: AndroidApp) {
     );
     if let Err(e) = result {
         log::error!("PhotoCraft stopped: {e}");
+    }
+}
+
+/// Registers the user's Fonts directory without stalling startup. `warm_fonts` may still be
+/// scanning the operating system's fonts; taking the shared engine waits for that worker, then
+/// adds this directory and wakes the UI so its generation-keyed family list is rebuilt.
+fn warm_user_fonts(dir: PathBuf, ctx: egui::Context) {
+    let worker_dir = dir.clone();
+    let worker = std::thread::Builder::new().name("photocraft-user-fonts".into()).spawn(move || {
+        let staged = worker_dir.to_string_lossy().into_owned();
+        let synced = platform::call("sync_fonts", &staged).and_then(|reply| protocol::parse_reply(&reply));
+        if let Err(e) = synced {
+            log::warn!("PhotoCraft could not read Download/PhotoCraft/Fonts: {e}");
+            return;
+        }
+        let engine = photocraft_text::shared();
+        let mut engine = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let count = engine.fonts.load_font_dir(&worker_dir);
+        drop(engine);
+        log::info!("PhotoCraft loaded {count} font candidate(s) from Download/PhotoCraft/Fonts");
+        ctx.request_repaint();
+    });
+    if let Err(e) = worker {
+        log::warn!("PhotoCraft could not start the user font scan for Download/PhotoCraft/Fonts: {e}");
     }
 }
 
@@ -132,6 +166,10 @@ struct AndroidShell {
     frame_work: Duration,
     /// App-private storage, where the run's mark is (see `crash_report`).
     root: PathBuf,
+    /// Private staging copy refreshed from Download/PhotoCraft/Fonts by the activity.
+    font_dir: PathBuf,
+    /// Wakes the UI after the background font scan, including a scan triggered by a new SAF grant.
+    font_ctx: egui::Context,
     /// Last known system bar & IME insets in device pixels `[top, bottom, left, right]`.
     last_insets_px: [i32; 4],
     /// Last logged diagnostic breakdown from `PhotoCraftActivity` (`insets_diag`).
@@ -139,13 +177,24 @@ struct AndroidShell {
 }
 
 impl Drop for AndroidShell {
-    /// The run ended normally, so the next launch has no crash log to save (see `crash_report::finish`).
+    /// Finish any queued recovery write before marking the run clean. An abrupt process kill may
+    /// not run Drop, which is why revisions are also queued continuously while editing.
     fn drop(&mut self) {
+        self.flush_recovery();
         crash_report::finish(&self.root);
     }
 }
 
 impl AndroidShell {
+    fn flush_recovery(&mut self) {
+        let Some(flush) = self.app.services.flush_autosaves.as_mut() else { return };
+        for (id, revision, result) in flush() {
+            if let Err(e) = result {
+                log::warn!("PhotoCraft could not finish recovery save for document {id}, revision {revision}: {e}");
+            }
+        }
+    }
+
     /// Take in what the activity reported since the last frame: picked files go to the UI's inbox,
     /// and failures and notes become notices.
     fn pump(&mut self) {
@@ -170,6 +219,9 @@ impl AndroidShell {
                     self.link.notify(true, text);
                 }
                 Some(protocol::Event::Done) => self.link.set_picking(false),
+                Some(protocol::Event::FontsChanged) => {
+                    warm_user_fonts(self.font_dir.clone(), self.font_ctx.clone());
+                }
                 None => log::warn!("PhotoCraft: unexpected event from the activity: {line:?}"),
             }
         }
@@ -279,6 +331,12 @@ impl AndroidShell {
 }
 
 impl eframe::App for AndroidShell {
+    fn on_exit(&mut self) {
+        // AndroidShell wraps the shared app, so forward its final preference/tool-state save.
+        eframe::App::on_exit(&mut self.app);
+        self.flush_recovery();
+    }
+
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let began = Instant::now();
         self.frame_started = Some(began);
