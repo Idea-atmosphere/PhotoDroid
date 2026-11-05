@@ -29,6 +29,7 @@ import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.DisplayCutout;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -69,6 +70,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *            "error" SEP name SEP message   (a picked file that couldn't be copied)
  *            "done"                         (the picker session is over)
  *            "fonts"                        (Download/PhotoCraft access was granted)
+ *            "text" SEP "" SEP committedText (Unicode text from the system keyboard)
  *            one event per "poll"; "" when none is waiting
  */
 public class PhotoCraftActivity extends NativeActivity {
@@ -179,6 +181,30 @@ public class PhotoCraftActivity extends NativeActivity {
                 updateSystemGestureExclusion(window.getDecorView());
             }
         }
+    }
+
+    /**
+     * Preserve complex Unicode text that has no Android keycode. Persian and other non-Latin IMEs
+     * can commit it as ACTION_MULTIPLE/KEYCODE_UNKNOWN. The NDK key event carries no corresponding
+     * character string, and the pinned winit backend therefore emits no text for it.
+     *
+     * Ordinary key events still go only to winit, so English input is not duplicated. This event is
+     * also forwarded to super: the pinned backend drops its payload but its native notification
+     * wakes the frame that drains the text queue.
+     */
+    @SuppressWarnings("deprecation")
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_MULTIPLE
+                && event.getKeyCode() == KeyEvent.KEYCODE_UNKNOWN) {
+            String text = event.getCharacters();
+            if (text != null && !text.isEmpty()) {
+                // The third protocol field is the unmodified payload. splitn(3) on the Rust side
+                // preserves spaces, Persian joining marks, emoji, and even a literal SEP in it.
+                events.add("text" + SEP + SEP + text);
+            }
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override

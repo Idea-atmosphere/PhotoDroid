@@ -196,8 +196,8 @@ impl AndroidShell {
     }
 
     /// Take in what the activity reported since the last frame: picked files go to the UI's inbox,
-    /// and failures and notes become notices.
-    fn pump(&mut self) {
+    /// failures and notes become notices, and committed keyboard text joins this frame's egui input.
+    fn pump(&mut self, raw_input: &mut egui::RawInput) {
         loop {
             let line = match platform::call("poll", "") {
                 Ok(line) => line,
@@ -222,6 +222,7 @@ impl AndroidShell {
                 Some(protocol::Event::FontsChanged) => {
                     warm_user_fonts(self.font_dir.clone(), self.font_ctx.clone());
                 }
+                Some(protocol::Event::Text(text)) => raw_input.events.push(egui::Event::Text(text)),
                 None => log::warn!("PhotoCraft: unexpected event from the activity: {line:?}"),
             }
         }
@@ -340,7 +341,6 @@ impl eframe::App for AndroidShell {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let began = Instant::now();
         self.frame_started = Some(began);
-        self.pump();
         self.app.logic(ctx, frame);
         self.frame_work = began.elapsed();
         // Keep frames coming while something is still to arrive: a picker's files, the keyboard's
@@ -358,6 +358,9 @@ impl eframe::App for AndroidShell {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let insets = self.system_insets(ctx, raw_input);
         raw_input.safe_area_insets = Some(insets);
+        // Drain before the shared app's hook so system text takes the same route as its internal
+        // Persian keyboard and reaches both ordinary TextEdits and the custom Type editor.
+        self.pump(raw_input);
         self.app.raw_input_hook(ctx, raw_input);
     }
 
