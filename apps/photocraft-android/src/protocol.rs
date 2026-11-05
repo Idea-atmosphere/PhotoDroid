@@ -28,6 +28,9 @@ pub enum Event {
     Done,
     /// The user granted access to Download/PhotoCraft, so its Fonts directory can be mirrored.
     FontsChanged,
+    /// Committed Unicode text from the system keyboard. Android delivers characters that have no
+    /// keycode (including Persian) as ACTION_MULTIPLE; the pinned winit backend drops that payload.
+    Text(String),
 }
 
 /// Parse one event line. `None` for an unknown kind (and for an empty line).
@@ -45,6 +48,7 @@ pub fn parse_event(line: &str) -> Option<Event> {
         "error" => Some(Event::Error { name, message: rest }),
         "done" => Some(Event::Done),
         "fonts" => Some(Event::FontsChanged),
+        "text" if !rest.is_empty() => Some(Event::Text(rest)),
         _ => None,
     }
 }
@@ -140,6 +144,9 @@ mod tests {
         assert!(matches!(parse_event(&join_fields(&["fd", "x.psd", "nope"])), Some(Event::Error { .. })));
         assert_eq!(parse_event("done"), Some(Event::Done));
         assert_eq!(parse_event("fonts"), Some(Event::FontsChanged));
+        assert_eq!(parse_event(&format!("text{SEP}{SEP}سلام دنیا")), Some(Event::Text("سلام دنیا".into())));
+        assert_eq!(parse_event(&format!("text{SEP}{SEP}🙂‍🎨")), Some(Event::Text("🙂‍🎨".into())));
+        assert_eq!(parse_event(&format!("text{SEP}{SEP}")), None);
         assert_eq!(parse_event(""), None);
         assert_eq!(parse_event(&join_fields(&["surprise", "x"])), None);
     }
