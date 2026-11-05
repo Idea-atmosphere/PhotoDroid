@@ -223,6 +223,22 @@ impl AndroidShell {
                     warm_user_fonts(self.font_dir.clone(), self.font_ctx.clone());
                 }
                 Some(protocol::Event::Text(text)) => raw_input.events.push(egui::Event::Text(text)),
+                Some(protocol::Event::Key { name, pressed, repeat }) => {
+                    if let Some(key) = android_key(&name) {
+                        raw_input.events.push(egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed,
+                            repeat,
+                            modifiers: egui::Modifiers::default(),
+                        });
+                    } else {
+                        log::warn!("PhotoCraft: unknown Android editing key {name:?}");
+                    }
+                }
+                Some(protocol::Event::KeyboardStatus(message)) => {
+                    diag::note(move || format!("Android keyboard: {message}"));
+                }
                 None => log::warn!("PhotoCraft: unexpected event from the activity: {line:?}"),
             }
         }
@@ -251,6 +267,26 @@ impl AndroidShell {
             }
             self.link.notify(true, format!("{label} could not be read: {e}"));
         }
+    }
+}
+
+/// Translate the protocol's stable editing-key names without exposing Android keycodes to egui.
+fn android_key(name: &str) -> Option<egui::Key> {
+    match name {
+        "Backspace" => Some(egui::Key::Backspace),
+        "Delete" => Some(egui::Key::Delete),
+        "Enter" => Some(egui::Key::Enter),
+        "ArrowLeft" => Some(egui::Key::ArrowLeft),
+        "ArrowRight" => Some(egui::Key::ArrowRight),
+        "ArrowUp" => Some(egui::Key::ArrowUp),
+        "ArrowDown" => Some(egui::Key::ArrowDown),
+        "Tab" => Some(egui::Key::Tab),
+        "Escape" => Some(egui::Key::Escape),
+        "Home" => Some(egui::Key::Home),
+        "End" => Some(egui::Key::End),
+        "PageUp" => Some(egui::Key::PageUp),
+        "PageDown" => Some(egui::Key::PageDown),
+        _ => None,
     }
 }
 
@@ -347,6 +383,7 @@ impl eframe::App for AndroidShell {
         // height while text is being typed, a held finger (so long-press gestures and tool flyouts
         // fire while a finger rests still), and the first seconds after launch.
         if self.link.is_picking()
+            || self.link.is_keyboard_active()
             || ctx.text_edit_focused()
             || ctx.input(|i| i.pointer.any_down() || i.any_touches())
             || self.started.elapsed() < SETTLE_TIME

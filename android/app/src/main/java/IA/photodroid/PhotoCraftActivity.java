@@ -29,6 +29,7 @@ import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.DisplayCutout;
 import android.view.Gravity;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -71,6 +72,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *            "done"                         (the picker session is over)
  *            "fonts"                        (Download/PhotoCraft access was granted)
  *            "text" SEP "" SEP committedText (Unicode text from the system keyboard)
+ *            "key" SEP name SEP state,repeat (an editing key from the IME)
+ *            "kbd" SEP "" SEP status         (callback name only; never typed content)
  *            one event per "poll"; "" when none is waiting
  */
 public class PhotoCraftActivity extends NativeActivity {
@@ -88,6 +91,7 @@ public class PhotoCraftActivity extends NativeActivity {
 
     private static volatile boolean welcomeShownInProcess = false;
     private Dialog welcomeDialog;
+    private PhotoCraftIme imeView;
 
     private final ConcurrentLinkedQueue<String> events = new ConcurrentLinkedQueue<>();
     private final ExecutorService io = Executors.newSingleThreadExecutor(runnable -> {
@@ -124,6 +128,11 @@ public class PhotoCraftActivity extends NativeActivity {
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         }
         View decorView = window.getDecorView();
+        // NativeActivity has no text editor for the IME. Add a transparent one above the native
+        // surface; it is visible/focused only while PhotoCraft explicitly asks for the keyboard.
+        imeView = new PhotoCraftIme(this, this);
+        imeView.setVisibility(View.GONE);
+        addContentView(imeView, new ViewGroup.LayoutParams(1, 1));
         decorView.setOnApplyWindowInsetsListener((view, insets) -> {
             recordInsets(view, insets);
             updateSystemGestureExclusion(view);
@@ -184,24 +193,23 @@ public class PhotoCraftActivity extends NativeActivity {
     }
 
     /**
-     * Preserve complex Unicode text that has no Android keycode. Persian and other non-Latin IMEs
-     * can commit it as ACTION_MULTIPLE/KEYCODE_UNKNOWN. The NDK key event carries no corresponding
-     * character string, and the pinned winit backend therefore emits no text for it.
-     *
-     * Ordinary key events still go only to winit, so English input is not duplicated. This event is
-     * also forwarded to super: the pinned backend drops its payload but its native notification
-     * wakes the frame that drains the text queue.
+     * While the transparent IME editor has focus, route text and editing keys through the same
+     * queue as InputConnection. This preserves their order and prevents English from arriving once
+     * through winit and again through the connection. Outside that mode, retain the legacy
+     * ACTION_MULTIPLE fallback for keyboards that send complex Unicode directly to the activity.
      */
     @SuppressWarnings("deprecation")
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getAction() == KeyEvent.ACTION_MULTIPLE
+        if (imeView != null && imeView.servingKeyboard()) {
+            if (queueKeyEvent(event)) {
+                return true;
+            }
+        } else if (event.getAction() == KeyEvent.ACTION_MULTIPLE
                 && event.getKeyCode() == KeyEvent.KEYCODE_UNKNOWN) {
             String text = event.getCharacters();
             if (text != null && !text.isEmpty()) {
-                // The third protocol field is the unmodified payload. splitn(3) on the Rust side
-                // preserves spaces, Persian joining marks, emoji, and even a literal SEP in it.
-                events.add("text" + SEP + SEP + text);
+                queueKeyboardText("legacy ACTION_MULTIPLE", text);
             }
         }
         return super.dispatchKeyEvent(event);
@@ -1247,16 +1255,138 @@ public class PhotoCraftActivity extends NativeActivity {
     private void softKeyboard(boolean show) {
         runOnUiThread(() -> {
             InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-            if (imm == null) {
+            if (imm == null || imeView == null) {
                 return;
             }
-            View view = getWindow().getDecorView();
             if (show) {
-                imm.showSoftInput(view, 0);
+                imeView.setVisibility(View.VISIBLE);
+                boolean focused = imeView.requestFocus();
+                keyboardStatus("show requested focus=" + focused);
+                imm.restartInput(imeView);
+                imm.showSoftInput(imeView, 0);
             } else {
-                imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
+                keyboardStatus("hide requested");
+                imm.hideSoftInputFromWindow(imeView.getWindowToken(), 0);
+                imeView.clearFocus();
+                imeView.setVisibility(View.GONE);
             }
         });
+    }
+
+    // ---- System keyboard event bridge (no typed content is logged) ----
+
+    void keyboardStatus(String status) {
+        events.add(join("kbd", "", status));
+    }
+
+    void queueKeyboardText(String source, String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        keyboardStatus(source);
+        // The third protocol field is the unmodified payload. Rust's splitn(3) preserves spaces,
+        // Persian joining marks, emoji, and even a literal SEP; only its diagnostic twin is logged.
+        events.add("text" + SEP + SEP + text);
+    }
+
+    void queueKeyPress(String name) {
+        queueKeyboardKey(name, true, false);
+        queueKeyboardKey(name, false, false);
+    }
+
+    void queueDeletion(int beforeLength, int afterLength) {
+        keyboardStatus("deleteSurrounding before=" + beforeLength + " after=" + afterLength);
+        for (int i = 0; i < beforeLength; i++) {
+            queueKeyPress("Backspace");
+        }
+        for (int i = 0; i < afterLength; i++) {
+            queueKeyPress("Delete");
+        }
+    }
+
+    /** Returns true when this event was consumed into the native queue. */
+    @SuppressWarnings("deprecation")
+    boolean queueKeyEvent(KeyEvent event) {
+        int action = event.getAction();
+        if (action == KeyEvent.ACTION_MULTIPLE) {
+            if (event.getKeyCode() != KeyEvent.KEYCODE_UNKNOWN) {
+                return false;
+            }
+            String text = event.getCharacters();
+            if (text == null || text.isEmpty()) {
+                return false;
+            }
+            queueKeyboardText("key ACTION_MULTIPLE", text);
+            return true;
+        }
+        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
+            return false;
+        }
+
+        String name = keyboardKeyName(event.getKeyCode());
+        if (name != null) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                keyboardStatus("key " + name);
+            }
+            queueKeyboardKey(name, action == KeyEvent.ACTION_DOWN, event.getRepeatCount() > 0);
+            return true;
+        }
+
+        // Modified printable keys belong to shortcuts, not text insertion. Unsupported ones keep
+        // the original native route instead of being inserted with their modifiers discarded.
+        int commandModifiers = KeyEvent.META_CTRL_MASK | KeyEvent.META_ALT_MASK | KeyEvent.META_META_MASK;
+        if ((event.getMetaState() & commandModifiers) != 0) {
+            return false;
+        }
+        int unicode = event.getUnicodeChar();
+        if (unicode > 0
+                && (unicode & KeyCharacterMap.COMBINING_ACCENT) == 0
+                && Character.isValidCodePoint(unicode)) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                queueKeyboardText("key Unicode", new String(Character.toChars(unicode)));
+            }
+            // Consume the release too; otherwise winit could deliver half of the same key.
+            return true;
+        }
+        return false;
+    }
+
+    private void queueKeyboardKey(String name, boolean pressed, boolean repeat) {
+        events.add(join("key", name, (pressed ? "down" : "up") + (repeat ? ",1" : ",0")));
+    }
+
+    private static String keyboardKeyName(int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_DEL:
+                return "Backspace";
+            case KeyEvent.KEYCODE_FORWARD_DEL:
+                return "Delete";
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                return "Enter";
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                return "ArrowLeft";
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                return "ArrowRight";
+            case KeyEvent.KEYCODE_DPAD_UP:
+                return "ArrowUp";
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                return "ArrowDown";
+            case KeyEvent.KEYCODE_TAB:
+                return "Tab";
+            case KeyEvent.KEYCODE_ESCAPE:
+                return "Escape";
+            case KeyEvent.KEYCODE_MOVE_HOME:
+                return "Home";
+            case KeyEvent.KEYCODE_MOVE_END:
+                return "End";
+            case KeyEvent.KEYCODE_PAGE_UP:
+                return "PageUp";
+            case KeyEvent.KEYCODE_PAGE_DOWN:
+                return "PageDown";
+            default:
+                return null;
+        }
     }
 
     // ---- Helpers ----

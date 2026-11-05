@@ -28,9 +28,13 @@ pub enum Event {
     Done,
     /// The user granted access to Download/PhotoCraft, so its Fonts directory can be mirrored.
     FontsChanged,
-    /// Committed Unicode text from the system keyboard. Android delivers characters that have no
-    /// keycode (including Persian) as ACTION_MULTIPLE; the pinned winit backend drops that payload.
+    /// Committed Unicode text from the system keyboard or its InputConnection.
     Text(String),
+    /// An editing key from the system keyboard. `name` uses the shell's platform-neutral names
+    /// (Backspace, Enter, ArrowLeft, ...), so this protocol remains independent of egui.
+    Key { name: String, pressed: bool, repeat: bool },
+    /// A privacy-safe keyboard milestone. It describes the callback, never the typed text.
+    KeyboardStatus(String),
 }
 
 /// Parse one event line. `None` for an unknown kind (and for an empty line).
@@ -49,6 +53,21 @@ pub fn parse_event(line: &str) -> Option<Event> {
         "done" => Some(Event::Done),
         "fonts" => Some(Event::FontsChanged),
         "text" if !rest.is_empty() => Some(Event::Text(rest)),
+        "key" if !name.is_empty() => {
+            let (state, repeat) = rest.split_once(',')?;
+            let pressed = match state {
+                "down" => true,
+                "up" => false,
+                _ => return None,
+            };
+            let repeat = match repeat {
+                "0" => false,
+                "1" => true,
+                _ => return None,
+            };
+            Some(Event::Key { name, pressed, repeat })
+        }
+        "kbd" if !rest.is_empty() => Some(Event::KeyboardStatus(rest)),
         _ => None,
     }
 }
@@ -147,6 +166,16 @@ mod tests {
         assert_eq!(parse_event(&format!("text{SEP}{SEP}سلام دنیا")), Some(Event::Text("سلام دنیا".into())));
         assert_eq!(parse_event(&format!("text{SEP}{SEP}🙂‍🎨")), Some(Event::Text("🙂‍🎨".into())));
         assert_eq!(parse_event(&format!("text{SEP}{SEP}")), None);
+        assert_eq!(
+            parse_event(&join_fields(&["key", "Backspace", "down,1"])),
+            Some(Event::Key { name: "Backspace".into(), pressed: true, repeat: true })
+        );
+        assert_eq!(
+            parse_event(&join_fields(&["key", "Enter", "up,0"])),
+            Some(Event::Key { name: "Enter".into(), pressed: false, repeat: false })
+        );
+        assert_eq!(parse_event(&join_fields(&["key", "Enter", "sideways,0"])), None);
+        assert_eq!(parse_event(&join_fields(&["kbd", "", "InputConnection.commitText"])), Some(Event::KeyboardStatus("InputConnection.commitText".into())));
         assert_eq!(parse_event(""), None);
         assert_eq!(parse_event(&join_fields(&["surprise", "x"])), None);
     }
