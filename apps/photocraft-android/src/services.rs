@@ -81,12 +81,20 @@ pub struct Link {
     pub inbox: Inbox,
     messages: Arc<Mutex<Vec<Message>>>,
     picking: Arc<AtomicBool>,
+    /// The transparent Android IME view is active, so its event queue needs regular frames.
+    keyboard: Arc<AtomicBool>,
     ctx: egui::Context,
 }
 
 impl Link {
     pub fn new(ctx: egui::Context) -> Self {
-        Self { inbox: Inbox::default(), messages: Arc::default(), picking: Arc::default(), ctx }
+        Self {
+            inbox: Inbox::default(),
+            messages: Arc::default(),
+            picking: Arc::default(),
+            keyboard: Arc::default(),
+            ctx,
+        }
     }
 
     pub fn notify(&self, error: bool, text: impl Into<String>) {
@@ -111,6 +119,16 @@ impl Link {
 
     pub fn set_picking(&self, picking: bool) {
         self.picking.store(picking, Ordering::Relaxed);
+    }
+
+    pub fn is_keyboard_active(&self) -> bool {
+        self.keyboard.load(Ordering::Relaxed)
+    }
+
+    fn set_keyboard_active(&self, active: bool) {
+        self.keyboard.store(active, Ordering::Relaxed);
+        // Also schedule a final drain when the keyboard is being hidden.
+        self.ctx.request_repaint();
     }
 
     fn start_picker(&self) {
@@ -156,6 +174,7 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
     let saver_for_debug = saver.clone();
     let (debug_root, cpu_root) = (dirs.root().to_path_buf(), dirs.root().to_path_buf());
     let (prefs_load, prefs_save) = (dirs.preferences(), dirs.preferences());
+    let keyboard_link = link.clone();
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             crate::crash_guard::guard("Open", || {
@@ -193,7 +212,8 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
         open_url: Some(Box::new(open_url)),
         // The activity makes the request explicit (see `softKeyboard` there); a failed request
         // leaves the keyboard as it is.
-        soft_keyboard: Some(Box::new(|show: bool| {
+        soft_keyboard: Some(Box::new(move |show: bool| {
+            keyboard_link.set_keyboard_active(show);
             let _ = platform::call("keyboard", if show { "show" } else { "hide" });
         })),
         inbox: Some(link.inbox.clone()),
