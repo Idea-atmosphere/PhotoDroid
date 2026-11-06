@@ -3,10 +3,10 @@
 //! The same egui interface as the desktop app (`photocraft-ui-egui`), run by eframe's
 //! NativeActivity backend. This crate provides what the desktop shell does natively:
 //!
-//! - file access through the system file picker (Storage Access Framework) and saves to
-//!   `Download/PhotoCraft` (MediaStore), both through `PhotoCraftActivity` (Java; see `platform`);
+//! - file access through the system file picker (Storage Access Framework) and saves to the
+//!   `Projects` or `Output` folder in `Download/PhotoCraft` (MediaStore), through `PhotoCraftActivity`;
 //! - app-private storage for preferences, crash recovery and brush presets, plus public
-//!   `Download/PhotoCraft/Fonts` and `Download/PhotoCraft/log` folders. A persisted SAF grant lets
+//!   `Download/PhotoCraft/Projects`, `Output`, `Fonts` and `log` folders. A persisted SAF grant lets
 //!   the activity mirror user fonts into private staging; logs go through MediaStore;
 //! - the system bars and soft keyboard, which the UI keeps clear of (`shell`).
 //!

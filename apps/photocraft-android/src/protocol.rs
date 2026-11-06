@@ -102,6 +102,13 @@ pub fn file_name(path: &str) -> String {
     if trimmed.is_empty() { "PhotoCraft".to_string() } else { trimmed.to_string() }
 }
 
+/// Whether a saved document belongs in `Download/PhotoCraft/Projects` rather than `Output`.
+/// Matching is case-insensitive and uses only the final extension of the sanitized file name.
+pub fn is_project_file(name: &str) -> bool {
+    let extension = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default();
+    matches!(extension.as_str(), "psd" | "psb" | "psdt" | "pcraft" | "ora")
+}
+
 /// The MIME type a saved file is filed under, from its extension.
 pub fn mime_type(name: &str) -> &'static str {
     let extension = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default();
@@ -222,6 +229,16 @@ mod tests {
         assert_eq!(mime_type("notes.csv"), "text/csv");
         assert_eq!(mime_type("work.pcraft"), "application/octet-stream");
         assert_eq!(mime_type("noextension"), "application/octet-stream");
+    }
+
+    #[test]
+    fn project_files_are_separated_from_other_output() {
+        for name in ["layers.psd", "large.PSB", "template.PsDt", "bundle.pcraft", "painting.ORA"] {
+            assert!(is_project_file(name), "{} must go to Projects", name);
+        }
+        for name in ["image.png", "photo.JPG", "notes.txt", "archive.psd.zip", "noextension", "psd"] {
+            assert!(!is_project_file(name), "{} must go to Output", name);
+        }
     }
 
     #[test]

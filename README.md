@@ -7,7 +7,7 @@
 code as the desktop app. What changes is the shell: instead of a winit window with native dialogs,
 the app runs inside an Android `NativeActivity`, with the system file picker, MediaStore for saves,
 app-private storage for preferences, crash recovery and brush presets, and public
-`Download/PhotoCraft/Fonts` and `Download/PhotoCraft/log` folders.
+`Download/PhotoCraft/Projects`, `Output`, `Fonts` and `log` folders.
 
 > **Status:** CI builds the arm64 library and an installable debug APK, and the host tests pass.
 > The app has **not** been run on a device or an emulator yet, so its behaviour on Android is
@@ -111,6 +111,8 @@ The shared crates are changed only where Android needs it, in a few small places
 
 At startup PhotoDroid creates these folders through MediaStore:
 
+- `Download/PhotoCraft/Projects/`: PSD, PSB, PSDT, PCRAFT and ORA project files are saved here.
+- `Download/PhotoCraft/Output/`: other exports, including PNG, JPEG, TIFF and text files, are saved here.
 - `Download/PhotoCraft/Fonts/`: put `.ttf`, `.otf`, `.ttc` or `.otc` files here, including inside
   nested folders. A small `README.txt` marks the folder before the first font is added. Because a
   file manager's fonts are not owned by PhotoDroid, the system picker asks for read access to the
@@ -156,7 +158,8 @@ also produces such a file, so it is not proof of a crash.
 
 - Launch, touch editing, the full interface.
 - **File › Open** (and Open As) through the Storage Access Framework. Several files can be picked.
-- **Save**, **Save As** and **Export** write to `Download/PhotoCraft` through MediaStore. Saving
+- **Save**, **Save As** and **Export** write through MediaStore to `Download/PhotoCraft/Projects`
+  for PSD/PSB/PSDT/PCRAFT/ORA documents, or `Download/PhotoCraft/Output` for other formats. Saving
   the same name again replaces the copy this app wrote earlier.
 - Preferences, crash recovery (autosave and restore) and brush presets live in app-private storage.
 - Links (Help, and so on) open in the browser.
@@ -167,8 +170,9 @@ also produces such a file, so it is not proof of a crash.
 
 - Placing files (Place Embedded/Linked), scripts, presets import and notes import need a
   synchronous file picker, which Android doesn't have. They show a message and do nothing.
-- Save doesn't ask for a location. Everything goes to `Download/PhotoCraft`. A document opened
-  from elsewhere is saved as a new file there; it doesn't write back to its original location.
+- Save doesn't ask for a location. Project documents go to `Download/PhotoCraft/Projects` and all
+  other exports to `Download/PhotoCraft/Output`. A document opened from elsewhere is saved as a new
+  file in the matching folder; it doesn't write back to its original location.
 - Clipboard images, the stylus tilt and eraser (touch force only), and the displays' colour profiles
   are not wired up.
 - The phone layout (see the design notes) is untested on a device. Tablets and windows at least
