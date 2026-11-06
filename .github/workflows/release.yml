@@ -17,6 +17,7 @@ permissions:
 
 env:
   NDK_VERSION: 27.2.12479018
+  BUILD_TOOLS_VERSION: 36.0.0
   CMDLINE_TOOLS_URL: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
 
 jobs:
@@ -105,7 +106,7 @@ jobs:
           fi
           SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses > "$RUNNER_TEMP/licenses.log" 2>&1 || true
-          if ! "$SDKMANAGER" --sdk_root="$SDK" "platforms;android-35" "build-tools;36.0.0" "ndk;${NDK_VERSION}" > "$RUNNER_TEMP/sdk.log" 2>&1; then
+          if ! "$SDKMANAGER" --sdk_root="$SDK" "platforms;android-35" "build-tools;${BUILD_TOOLS_VERSION}" "ndk;${NDK_VERSION}" > "$RUNNER_TEMP/sdk.log" 2>&1; then
             bash .github/scripts/report-failure.sh "Android SDK install failed" "$RUNNER_TEMP/sdk.log"
             tail -n 40 "$RUNNER_TEMP/sdk.log"
             exit 1
@@ -219,10 +220,10 @@ jobs:
               exit 1
               ;;
           esac
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$SRC"
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify "$SRC"
           bash .github/scripts/inspect-apk.sh "$SRC" \
             "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" \
-            "$ANDROID_HOME/build-tools/35.0.0/aapt2"
+            "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt2"
           DEST="android/app/build/outputs/apk/release/PhotoDroid-v${VERSION_NAME}.apk"
           [ "$SRC" = "$DEST" ] || mv "$SRC" "$DEST"
           ZIP_DEST="android/app/build/outputs/apk/release/PhotoDroid-v${VERSION_NAME}.zip"
