@@ -2,8 +2,8 @@
 //!
 //! Files come in through the system file picker: the activity hands each picked file over (as a
 //! descriptor, or as a copy in app cache) and a reader thread puts its bytes in [`Link::inbox`],
-//! for the UI to open. The UI thread never reads a file itself. Saves go to `Download/PhotoCraft`
-//! through MediaStore (see `PhotoCraftActivity.save`). Preferences, crash recovery and brush
+//! for the UI to open. The UI thread never reads a file itself. Saves go to `Projects` or `Output`
+//! inside `Download/PhotoCraft` through MediaStore (see `PhotoCraftActivity.save`). Preferences, crash recovery and brush
 //! presets live in app-private storage. Anything that needs a desktop facility is left `None`, so
 //! the UI hides or skips it, as it does on the web.
 
@@ -146,7 +146,7 @@ fn locked<T>(queue: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// The file dialog service (`Services::file_dialog`). Save has no dialog: the suggested name is
-/// used, in Download/PhotoCraft. File › Open starts the system picker, and the files it picks come
+/// used, in Projects or Output under Download/PhotoCraft. File › Open starts the system picker, and the files it picks come
 /// back through the inbox to be opened there, so the dialog is answered as cancelled at once. A
 /// command that reads one file (place, scripts, presets, notes) would otherwise open it as a new
 /// document, so it gets a message instead and is cancelled.
@@ -295,9 +295,10 @@ fn is_diagnostic_log_key(key: &str) -> bool {
     is_diagnostic_log(key.strip_prefix("log/").unwrap_or(key))
 }
 
-/// Saves exports into `Download/PhotoCraft` and diagnostic logs into its `log` subdirectory. It
-/// remembers the copy each key was saved to, so a second save replaces that copy instead of
-/// adding "name (1)". Log keys have a `log/` prefix so they cannot collide with a document export.
+/// Saves project documents into `Download/PhotoCraft/Projects`, other exports into `Output`, and
+/// diagnostic logs into `log`. It remembers the copy each key was saved to, so a second save
+/// replaces that copy instead of adding "name (1)". Bare document keys also retain the previous
+/// root-level URI after an upgrade. Log keys have a `log/` prefix to avoid document collisions.
 struct Saver {
     staging: PathBuf,
     index: PathBuf,
@@ -312,7 +313,10 @@ impl Saver {
 
     fn save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let name = protocol::file_name(path);
-        self.save_as("save", &name, &name, bytes)
+        let command = if protocol::is_project_file(&name) { "save_project" } else { "save_output" };
+        // Keep the existing bare-name key: after an upgrade, the previous root-level copy is
+        // replaced only after the new copy in Projects/Output is complete.
+        self.save_as(command, &name, &name, bytes)
     }
 
     fn save_log(&self, name: &str, bytes: &[u8]) -> Result<(), String> {

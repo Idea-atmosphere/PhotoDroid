@@ -81,6 +81,8 @@ public class PhotoCraftActivity extends NativeActivity {
     private static final int REQUEST_OPEN = 0x5043;
     private static final int REQUEST_USER_TREE = 0x5044;
     private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/PhotoCraft";
+    private static final String PROJECT_FOLDER = EXPORT_FOLDER + "/Projects";
+    private static final String OUTPUT_FOLDER = EXPORT_FOLDER + "/Output";
     private static final String LOG_FOLDER = EXPORT_FOLDER + "/log";
     private static final String FONT_FOLDER = EXPORT_FOLDER + "/Fonts";
     private static final String EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents";
@@ -506,8 +508,11 @@ public class PhotoCraftActivity extends NativeActivity {
                         refreshInsets();
                     }
                     return ok(insetDiag);
+                case "save_project":
+                    return ok(save(argument, PROJECT_FOLDER));
                 case "save":
-                    return ok(save(argument, EXPORT_FOLDER));
+                case "save_output":
+                    return ok(save(argument, OUTPUT_FOLDER));
                 case "save_log":
                     return ok(save(argument, LOG_FOLDER));
                 case "sync_fonts":
@@ -706,8 +711,16 @@ public class PhotoCraftActivity extends NativeActivity {
 
     // ---- Public folders, fonts and saving (Download/PhotoCraft) ----
 
-    /** Create both visible folders even before the first font or diagnostic log exists. */
+    /** Create all visible folders even before the first document, font or diagnostic log exists. */
     private void ensureUserFolders() throws IOException {
+        ensureMarker(
+                PROJECT_FOLDER,
+                "PhotoDroid saves PSD, PSB, PSDT, PCRAFT and ORA project files here.\n"
+        );
+        ensureMarker(
+                OUTPUT_FOLDER,
+                "PhotoDroid saves PNG, JPEG and other exported files here.\n"
+        );
         ensureMarker(
                 FONT_FOLDER,
                 "Put .ttf, .otf, .ttc and .otc font files here, then restart PhotoDroid.\n"
