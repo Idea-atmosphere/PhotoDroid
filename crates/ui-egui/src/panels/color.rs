@@ -24,8 +24,23 @@ pub(crate) fn field_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, chips: Rec
     let fg_resp = ui.interact(fgr, ui.scope_id().with("field-fg"), Sense::click());
     let picked = if fg_resp.clicked() { false } else { bg_resp.clicked() || bg_active };
     app.ui.color_panel.background = picked;
-    if fg_resp.double_clicked() || bg_resp.double_clicked() {
-        crate::color_picker_ui::open(app, if picked { "background" } else { "foreground" });
+    // A held chip is not a click, so the picker takes the chip itself rather than the one picked.
+    if let Some(background) = picker_chip(crate::mobile::held_or_double(ui.ctx(), &fg_resp), crate::mobile::held_or_double(ui.ctx(), &bg_resp)) {
+        app.ui.color_panel.background = background;
+        crate::color_picker_ui::open(app, if background { "background" } else { "foreground" });
+    }
+}
+
+/// The chip a Color Picker opens on, given which chips were double-clicked or held: `Some(true)`
+/// for the background, `Some(false)` for the foreground, which is on top where the two overlap and
+/// wins, as it does for clicks. `None` when neither was.
+fn picker_chip(fg_held: bool, bg_held: bool) -> Option<bool> {
+    if fg_held {
+        Some(false)
+    } else if bg_held {
+        Some(true)
+    } else {
+        None
     }
 }
 

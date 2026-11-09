@@ -391,3 +391,22 @@ fn bench_gallery_preview() {
         println!("{f:>14}: old fit {old:>5.0} ms, new fit {fit:>6.0} ms, new 100 % (1100x800) {screen:>5.0} ms");
     }
 }
+
+/// On a phone the preview goes under the zoom bar and the two lists fit the width beside each other.
+#[test]
+fn a_phone_sized_gallery_stacks_the_preview_and_fits_the_columns() {
+    use egui::{Pos2, Rect as ERect, pos2, vec2};
+    let desk = ERect::from_min_size(pos2(0.0, 30.0), vec2(1400.0, 870.0));
+    let (area, _, mid, right) = layout(desk);
+    assert_eq!((mid.width(), right.width()), (MID_W, RIGHT_W));
+    assert!(area.right() <= mid.left());
+    let phone = ERect::from_min_size(pos2(0.0, 30.0), vec2(390.0, 790.0));
+    let (area, zoom, mid, right) = layout(phone);
+    assert!(area.width() >= 390.0 - 0.5 && zoom.bottom() <= mid.top() + 0.5);
+    assert!(mid.right() <= right.left() + 0.5 && right.right() <= 390.0 + 0.5);
+    assert!(thumb_columns(mid.width() - 16.0) >= 1);
+    let sideways = ERect::from_min_size(pos2(0.0, 30.0), vec2(844.0, 360.0));
+    let (area, _, mid, right) = layout(sideways);
+    assert!(area.width() > 250.0 && mid.width() < MID_W && right.right() <= 844.5);
+    assert_eq!(thumb_columns(252.0), 3);
+}

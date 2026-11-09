@@ -372,10 +372,15 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
     }
     let p = params(f);
     let mut browse = false;
-    ui.horizontal_top(|ui| {
+    // On the phone the settings go under the page preview, which takes the dialog's width.
+    let room = ui.available_width();
+    let stacked = crate::mobile::gestures_on(ui.ctx()) && room < 330.0 + 12.0 + 340.0;
+    let layout = if stacked { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
         // Page preview.
         ui.vertical(|ui| {
-            let (area, _) = ui.allocate_exact_size(egui::vec2(330.0, 400.0), egui::Sense::hover());
+            let preview = if stacked { egui::vec2(room.min(330.0), (room.min(330.0) * 1.2).min(400.0)) } else { egui::vec2(330.0, 400.0) };
+            let (area, _) = ui.allocate_exact_size(preview, egui::Sense::hover());
             ui.painter().rect_filled(area, 0.0, t.canvas);
             match photocraft_engine::print_cmds::layout(&doc, &p, "file.print") {
                 Ok(mut l) => {
@@ -463,7 +468,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
         });
         ui.add_space(12.0);
         ui.vertical(|ui| {
-            ui.set_width(340.0);
+            ui.set_width(room.min(340.0));
             let head = |ui: &mut egui::Ui, s: &str| {
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(s).font(crate::theme::semibold(12.0)).color(t.text));

@@ -208,7 +208,7 @@ fn render_start_content(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[St
 
         ui.add_space(10.0);
 
-        let title_galley = ui.painter().layout_no_wrap(tl!("PhotoCraft").into(), crate::theme::semibold(20.0), t.text);
+        let title_galley = ui.painter().layout_no_wrap(tl!("PhotoDroid").into(), crate::theme::semibold(20.0), t.text);
         let (title_r, _) = ui.allocate_exact_size(title_galley.size(), Sense::hover());
         ui.painter().galley(title_r.min, title_galley, t.text);
     });
@@ -226,6 +226,12 @@ fn render_start_content(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[St
     } else {
         crate::home_recent_ui::show_home_recent(app, ui, recent, content_w);
     }
+
+    // Join us on Telegram, centered under the content.
+    ui.horizontal(|ui| {
+        ui.add_space(((content_w - 190.0) / 2.0).max(0.0));
+        crate::links::telegram_button(app, ui, 190.0);
+    });
 
     ui.add_space(24.0);
 }
@@ -259,14 +265,18 @@ fn render_first_run_content(app: &mut PhotocraftApp, ui: &mut egui::Ui, content_
         let icon_box = Rect::from_center_size(egui::pos2(drop_r.center().x, drop_r.center().y - 18.0), egui::vec2(40.0, 40.0));
         crate::icons::paint(ui, icon_box, "image", 34.0, if is_hov { t.text } else { t.text_dim });
 
-        let drop_msg = start_screen_drop_hint(app);
-        ui.painter().text(
-            egui::pos2(drop_r.center().x, drop_r.center().y + 20.0),
-            egui::Align2::CENTER_CENTER,
-            drop_msg,
-            crate::theme::medium(14.0),
-            if is_hov { t.text } else { t.text_faint },
-        );
+        // Drag-and-drop hints mean nothing on Android (files come from the picker), so the
+        // Android start screen leaves the hint out.
+        if !cfg!(target_os = "android") {
+            let drop_msg = start_screen_drop_hint(app);
+            ui.painter().text(
+                egui::pos2(drop_r.center().x, drop_r.center().y + 20.0),
+                egui::Align2::CENTER_CENTER,
+                drop_msg,
+                crate::theme::medium(14.0),
+                if is_hov { t.text } else { t.text_faint },
+            );
+        }
 
         if drop_resp.clicked() {
             let _ = app.open_dialog_file();

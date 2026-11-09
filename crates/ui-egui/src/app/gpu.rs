@@ -12,6 +12,14 @@ impl PhotocraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.perf.gpu_info.set_available(&rs.available_adapters);
         self.gpu_render_state = Some(rs.clone());
+        // On a phone the document is drawn on the CPU canvas; egui still uses the GPU (see
+        // `gpu_canvas::SHARED_GPU_MEMORY`).
+        if let Some(reason) = gpu_canvas::cpu_canvas_reason(gpu_canvas::SHARED_GPU_MEMORY) {
+            log::info!("document canvas: {reason}");
+            self.perf.gpu_info.canvas = "cpu".into();
+            self.perf.gpu_info.fallback = Some(reason.into());
+            return;
+        }
         let gpu = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu_canvas::GpuCanvas::with_tile(&rs, Some(tile)))) {
             Ok(gpu) => gpu,
             Err(payload) => {

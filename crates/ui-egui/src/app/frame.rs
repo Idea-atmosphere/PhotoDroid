@@ -107,7 +107,7 @@ impl PhotocraftApp {
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
         for (name, bytes) in arrived {
-            if let Err(e) = self.open_bytes(&name, &bytes) {
+            if let Err(e) = self.open_bytes_owned(&name, bytes) {
                 self.open_failed(&name, &e);
             }
         }

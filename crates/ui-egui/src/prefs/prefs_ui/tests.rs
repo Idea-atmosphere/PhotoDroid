@@ -2374,3 +2374,27 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
 }
+
+#[test]
+fn on_change_autosave_does_not_wait_for_the_interval() {
+    use std::sync::{Arc, Mutex};
+    type Saved = Arc<Mutex<Vec<(u64, u64)>>>;
+    let saved: Saved = Arc::default();
+    let sink = saved.clone();
+    let services = crate::Services {
+        autosave: Some(Box::new(move |doc: &Arc<photocraft_doc::Document>, rev: u64, _path: Option<&str>| {
+            sink.lock().unwrap().push((doc.id.0, rev));
+            Ok(())
+        })),
+        autosave_on_change: true,
+        ..Default::default()
+    };
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    super::save::tick(&mut app, &ctx);
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    // No autosave_now: the mobile service must bypass the minutes timer on this upkeep pass.
+    super::save::tick(&mut app, &ctx);
+    assert_eq!(saved.lock().unwrap().len(), 1);
+}

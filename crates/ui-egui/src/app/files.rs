@@ -63,6 +63,19 @@ impl PhotocraftApp {
         self.open_bytes_from(name, bytes, None)
     }
 
+    /// [`open_bytes`](Self::open_bytes) for bytes the caller hands over (the inbox of picked
+    /// files): a background open takes them without a second copy.
+    pub fn open_bytes_owned(&mut self, name: &str, bytes: Vec<u8>) -> Result<Vec<String>, String> {
+        if !self.background_jobs {
+            return self.open_bytes(name, &bytes);
+        }
+        if let Some(r) = preset_files_ui::open(self, name, &bytes) {
+            return r.map(|()| Vec::new());
+        }
+        jobs_ui::start_open(self, name, None, jobs_ui::bytes_owned(bytes), None, None)?;
+        Ok(Vec::new())
+    }
+
     /// [`Self::open_bytes`] for a file read from `path` (File › Save writes back there; it goes
     /// to Open Recent), when known.
     pub(crate) fn open_bytes_from(&mut self, name: &str, bytes: &[u8], path: Option<&str>) -> Result<Vec<String>, String> {

@@ -388,7 +388,7 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
             if on { t.text_dim } else { t.text_faint },
         );
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.clone()));
-        if resp.double_clicked() {
+        if crate::mobile::held_or_double(ui.ctx(), &resp) {
             crate::layer_style::open_for_layer(app, l.id, kind);
         }
         // #2846: right-click opens the layer style menu (Create Layer, Copy Layer Style…), as in Photoshop.

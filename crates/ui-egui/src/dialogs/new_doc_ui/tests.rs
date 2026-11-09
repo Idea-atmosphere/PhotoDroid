@@ -1,5 +1,18 @@
 use super::*;
 
+/// On a phone the details go under the presets, and the cards fit the dialog's width.
+#[test]
+fn a_narrow_dialog_stacks_the_details_and_fits_the_cards() {
+    assert!(!stack_details(800.0));
+    assert!(stack_details(387.0));
+    assert_eq!(card_columns(GRID_W), 3);
+    assert_eq!(card_width(GRID_W, 3), CARD_W);
+    assert_eq!(card_columns(363.0), 2);
+    assert!(card_width(363.0, 2) * 2.0 + CARD_GAP <= 363.0);
+    assert_eq!(card_columns(150.0), 1);
+    assert!(card_width(150.0, 1) <= 150.0);
+}
+
 /// #321: New Document offers the working space and the other profiles of the mode's space.
 #[test]
 fn color_profile_menu_lists_the_profiles_of_the_modes_space() {

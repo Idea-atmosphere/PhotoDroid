@@ -110,7 +110,7 @@ pub(super) fn break_area(
             .lines()
             .map(|l| {
                 let lm = l.metrics();
-                (l.text_range().start, (lm.advance - lm.trailing_whitespace) * scale)
+                (l.text_range().start, (lm.advance - lm.hanging_advance) * scale)
             })
             .collect();
         // A line still wider than its span that some span of the shape would hold: the shape ran
@@ -221,10 +221,10 @@ pub(super) fn line_metrics(
     let (ascent, descent) = if vertical {
         let h = if half > 0.0 { half } else { first_px * 0.5 };
         (h, h)
-    } else if m.ascent > 0.0 || m.descent > 0.0 {
-        (m.ascent, m.descent)
     } else {
-        (first_px * 0.8, first_px * 0.2)
+        let content_ascent = m.baseline - m.content_block_min_coord;
+        let content_descent = m.content_block_max_coord - m.baseline;
+        if content_ascent > 0.0 || content_descent > 0.0 { (content_ascent, content_descent) } else { (first_px * 0.8, first_px * 0.2) }
     };
     LineMetrics { ascent, descent, leading }
 }

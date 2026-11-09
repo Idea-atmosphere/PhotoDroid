@@ -84,9 +84,13 @@ pub(super) fn paint_cpu_document(
     if let Some(tex) = tex {
         if rotated {
             paint_mapped_image_at(painter, xf, tex, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), origin, size, Color32::WHITE);
+            // The loupe samples the picture as it is drawn unrotated, so a rotated frame has none to offer.
+            crate::virtual_mouse::forget_view(&painter.ctx());
         } else {
             let uv = if xf.flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
             painter.image(tex, img_rect, uv, Color32::WHITE);
+            // The phone's magnifier samples this picture around the virtual pointer (virtual_mouse.rs).
+            crate::virtual_mouse::record_view(&painter.ctx(), tex, img_rect, xf.flip);
         }
     }
 }

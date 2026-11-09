@@ -225,6 +225,19 @@ pub(crate) fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc
     (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
     (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
     let key = h.finish();
+    if matches!(layer.content, LayerContent::Text(_)) {
+        // The diagnostic log notes a text layer's effect key when it changes (see `photocraft_doc::diag`).
+        photocraft_doc::diag::note_changed(layer.id.0, key, || format!("effects of text layer {} keyed {key:016x} over {region:?}", layer.id.0));
+    }
+    if matches!(layer.content, LayerContent::Smart(_)) && effects::has_effects(layer) {
+        // Smart layers with layer effects (a Photoshop instance whose glow must follow its
+        // contents): the key, the region and the cache's size show whether a Save Contents
+        // refresh changed the maps' input.
+        let tiles = layer.surface().map_or(0, |s| s.tile_count());
+        photocraft_doc::diag::note_changed(layer.id.0, key, || {
+            format!("effects of smart layer {} keyed {key:016x} over {region:?}, cache {tiles} tile(s)", layer.id.0)
+        });
+    }
     // Prepared for this render (see `prepare_effects`): no global lookup, no build.
     if let Some((m, _)) = cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return m.clone();

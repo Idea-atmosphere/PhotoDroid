@@ -309,6 +309,8 @@ pub fn text_layer_from_tysh(data: &[u8], dpi: f32) -> Option<TextLayer> {
         let corrected = [a, b, c, d, a * x + c * y + e, b * x + d * y + f];
         if corrected.iter().all(|v| v.is_finite()) {
             layer.transform.m = corrected;
+            // The diagnostic log (Downloads/PhotoCraft) shows when this import took the fold.
+            photocraft_doc::diag::note(|| format!("PSD text: legacy point origin ({x:.0}, {y:.0}) folded into the transform"));
         }
     }
     layer.sync_summary();

@@ -78,7 +78,7 @@ pub use setup::{Refresh, device_descriptor, device_limits, display_texels, timin
 use shaders::{CANVAS_WGSL, ENCODE_WGSL, MIP_WGSL};
 #[cfg(not(target_arch = "wasm32"))]
 use texels::texel_to_f32;
-pub use texels::{LayerFit, premultiply_rgba8, premultiply_rgba16f};
+pub use texels::{cpu_canvas_reason, LayerFit, SHARED_GPU_MEMORY, premultiply_rgba8, premultiply_rgba16f};
 #[cfg(test)]
 use texels::{f16_to_f32, f32_to_f16};
 use texels::{texel_bytes, texels, texels_into};

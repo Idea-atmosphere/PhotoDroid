@@ -27,7 +27,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         gpu.set_style(style);
         app.prefs_rt.gpu_style = Some(style);
     }
-    autosave(app);
+    autosave(app, ctx);
     #[cfg(not(target_arch = "wasm32"))]
     link_updates(app, ctx);
     history_log(app);
@@ -231,10 +231,15 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(wait));
 }
 
-/// Background autosave of documents with unsaved changes every N minutes (File Handling).
-fn autosave(app: &mut PhotocraftApp) {
+/// Background autosave of documents with unsaved changes every N minutes (File Handling), or on
+/// every changed revision for a mobile service that sets [`crate::Services::autosave_on_change`].
+fn autosave(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    const ON_CHANGE_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+    const ON_CHANGE_RETRY_MS: f64 = 2_000.0;
+
     let fh = &app.session.prefs().file_handling;
     let (on, minutes) = (fh.autosave, fh.autosave_minutes.max(1));
+    let on_change = app.services.autosave_on_change;
     if app.services.autosave.is_none() {
         return;
     }
@@ -274,15 +279,27 @@ fn autosave(app: &mut PhotocraftApp) {
     if !on {
         return;
     }
-    let interval = minutes as f64 * 60_000.0;
-    if app.prefs_rt.next_autosave_ms == 0.0 || app.prefs_rt.next_autosave_ms > now + interval {
+    if on_change {
+        if now < app.prefs_rt.on_change_retry_ms {
+            if app.prefs_rt.autosave_pending.is_empty() {
+                let wait = app.prefs_rt.on_change_retry_ms - now;
+                ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait / 1000.0).unwrap_or(ON_CHANGE_POLL));
+            } else {
+                ctx.request_repaint_after(ON_CHANGE_POLL);
+            }
+            return;
+        }
+    } else {
+        let interval = minutes as f64 * 60_000.0;
+        if app.prefs_rt.next_autosave_ms == 0.0 || app.prefs_rt.next_autosave_ms > now + interval {
+            app.prefs_rt.next_autosave_ms = now + interval;
+            return;
+        }
+        if now < app.prefs_rt.next_autosave_ms {
+            return;
+        }
         app.prefs_rt.next_autosave_ms = now + interval;
-        return;
     }
-    if now < app.prefs_rt.next_autosave_ms {
-        return;
-    }
-    app.prefs_rt.next_autosave_ms = now + interval;
     let jobs: Vec<_> = app
         .session
         .documents()
@@ -305,8 +322,23 @@ fn autosave(app: &mut PhotocraftApp) {
                     let template = "Autosave failed: {error}";
                     app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
                     app.ui.status_error = true;
+                    if on_change {
+                        app.prefs_rt.on_change_retry_ms = now + ON_CHANGE_RETRY_MS;
+                        break;
+                    }
                 }
             }
+        }
+    }
+    if on_change {
+        if app.prefs_rt.autosave_pending.is_empty() {
+            if app.prefs_rt.on_change_retry_ms > now {
+                let wait = app.prefs_rt.on_change_retry_ms - now;
+                ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait / 1000.0).unwrap_or(ON_CHANGE_POLL));
+            }
+        } else {
+            // Only a pending write needs fast polling; an idle document does not keep waking the UI.
+            ctx.request_repaint_after(ON_CHANGE_POLL);
         }
     }
 }

@@ -750,7 +750,7 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             }
                             for (slot_index, slot) in section.iter() {
                                 let key = egui::Id::unique(("tool-slot", *slot_index));
-                                let tool = panels::slot_tool(ui, app.ui.tool, slot, key);
+                                let tool = slot_tool(ui, app.ui.tool, slot, key);
                                 let selected = slot.contains(&app.ui.tool);
                                 // Suppress hover tooltips on the phone strip so holding a tool button opens its flyout
                                 // without a competing tooltip popup.
@@ -1473,6 +1473,17 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.painter().line_segment([bottom.left_center(), bottom.right_center()], Stroke::new(1.0, t.separator));
 }
 
+
+/// The tool a phone strip slot shows: the current tool if it belongs to the slot, else the last
+/// one used (kept in egui temp memory under `key`), else the slot's first tool. The phone strip
+/// keeps its own per-slot memory (`panels::toolbar`'s `slot_tool` reads the desktop's group list).
+fn slot_tool(ui: &egui::Ui, current: crate::state::Tool, slot: &[crate::state::Tool], key: egui::Id) -> crate::state::Tool {
+    if slot.contains(&current) {
+        ui.data_mut(|d| d.insert_temp(key, current));
+        return current;
+    }
+    ui.data(|d| d.get_temp::<Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
+}
 
 #[cfg(test)]
 mod tests {

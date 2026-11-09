@@ -439,10 +439,12 @@ fn color_field_cursor_stays_inside_the_field() {
     }
 }
 
-fn field_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+/// The Color field on a phone (the touch gestures on) or off it.
+fn field_harness_with(app: PhotocraftApp, phone: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
     // 60 fps steps, so two clicks a frame apart are a double-click.
     let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut PhotocraftApp| {
+            crate::mobile::set_gestures(ui.ctx(), phone);
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 color_field(app, ui);
             }
@@ -452,6 +454,56 @@ fn field_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, Photocraf
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
     h.run_steps(2);
     h
+}
+
+fn field_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    field_harness_with(app, true)
+}
+
+/// A finger on the screen for `steps` frames (at 60 fps), then lifted: a tap at one step, a
+/// press held past egui's long-press time at more. Touches are sent with their pointer events,
+/// as egui-winit sends them.
+fn touch(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2, steps: usize) {
+    use egui::{Event, Modifiers, PointerButton, TouchDeviceId, TouchId, TouchPhase};
+    let finger = |phase| Event::Touch { device_id: TouchDeviceId(0), id: TouchId(0), phase, pos: p, force: None };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(finger(TouchPhase::Start));
+    h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(steps);
+    h.event(finger(TouchPhase::End));
+    h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+/// On a touch screen a press held down opens the Color Picker on the chip under the finger, as
+/// a double-click does with a mouse; a tap only picks the chip.
+#[test]
+fn holding_a_chip_on_a_touch_screen_opens_its_color_picker() {
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut h = field_harness(app);
+    let min = h.ctx.input(|i| i.viewport_rect()).min;
+    for (p, target) in [(vec2(40.0, 40.0), "background"), (vec2(30.0, 30.0), "foreground")] {
+        h.state_mut().ui.dialogs.clear();
+        h.run_steps(40);
+        touch(&mut h, min + p, 1);
+        assert!(h.state().ui.dialogs.is_empty(), "a tap only picks the chip");
+        touch(&mut h, min + p, 60);
+        let [d] = h.state().ui.dialogs.as_slice() else { panic!("one Color Picker") };
+        assert_eq!(d.fields.get("__colorPicker").and_then(Value::as_str), Some(target));
+    }
+}
+
+/// Off the phone layout a long press opens nothing: the desktop, and a tablet's desktop chrome,
+/// keep the double-click alone.
+#[test]
+fn off_the_phone_layout_a_held_chip_opens_nothing() {
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut h = field_harness_with(app, false);
+    let min = h.ctx.input(|i| i.viewport_rect()).min;
+    h.run_steps(40);
+    touch(&mut h, min + vec2(40.0, 40.0), 60);
+    assert!(h.state().ui.dialogs.is_empty(), "a long press is not a double-click off the phone layout");
 }
 
 fn click(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2) {

@@ -104,7 +104,7 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
     };
     let band_len = w * tile as usize;
     #[cfg(not(target_arch = "wasm32"))]
-    {
+   photocraft_doc::cpu::install(|| {{
         use rayon::prelude::*;
         let bands = rect.height().div_ceil(tile as u32) as usize;
         if bands >= 2 * rayon::current_num_threads() {
@@ -138,7 +138,7 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
         }
     }
     out
-}
+})
 
 /// Runs `f` with this thread's document blend flags set ([`psblend::LAB_MIX`], [`psblend::HDR`]),
 /// then restores the values they had (also on unwind): a nested rayon job can run another tile

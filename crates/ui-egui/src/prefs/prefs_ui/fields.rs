@@ -15,7 +15,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             let system = system_theme(app, ui.ctx());
-            prefs_body(ui, f, system);
+            prefs_body(ui, f, system, crate::mobile::active(app, ui.ctx()));
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -176,8 +176,90 @@ pub(super) fn preference_sections(values: &Value, search: &str) -> Vec<(&'static
         .collect()
 }
 
-/// Preferences: section list on the left, the section's settings on the right.
-fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>) {
+/// Preferences on a phone: the sections as pill tabs above the fields.
+fn prefs_phone_body(
+    ui: &mut egui::Ui,
+    f: &Map<String, Value>,
+    section: &mut String,
+    values: &mut Value,
+    lang: crate::i18n::Lang,
+    system: Option<egui::Theme>,
+    found: &[(&'static str, &'static str)],
+    search: &str,
+) {
+    let t = Tokens::get(ui.ctx());
+    if found.is_empty() {
+        ui.label(RichText::new(tl!("No matching settings")).color(t.text_dim));
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for &(id, title) in found {
+            if crate::widgets::pill_tab(ui, tl!(title), section.as_str() == id).clicked() {
+                *section = id.to_string();
+            }
+        }
+    });
+    ui.add_space(6.0);
+    let title = SECTIONS.iter().find(|(id, _)| *id == section.as_str()).map_or("General", |(_, name)| *name);
+    ui.label(RichText::new(tl!(&title)).font(crate::theme::semibold(14.0)).color(t.text));
+    ui.add_space(6.0);
+    prefs_fields(ui, f, values, section.as_str(), lang, system, search);
+}
+
+/// One section's fields, and its Reset Section button. The phone's tabs body and the desktop's
+/// settings column both draw them.
+fn prefs_fields(
+    ui: &mut egui::Ui,
+    f: &Map<String, Value>,
+    values: &mut Value,
+    section: &str,
+    lang: crate::i18n::Lang,
+    system: Option<egui::Theme>,
+    search: &str,
+) {
+    let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, name)| *name);
+    let show_all = search.trim().is_empty()
+        || crate::i18n::Lang::EN.contains_ignore_case(title, search.trim())
+        || lang.contains_ignore_case(tl!(&title), search.trim());
+    let filter = if show_all { "" } else { search.trim() };
+    let order: Vec<String> = f.get("__order").and_then(|o| o.get(section)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    if !has_visible_fields(values, section) {
+        ui.add_space(4.0);
+        ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
+    } else if let Some(obj) = values.get_mut(section).and_then(Value::as_object_mut) {
+        section_fields(ui, section, obj, &order, lang, system, filter);
+        if section == "fileHandling" {
+            ui.label(
+                RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))
+                    .color(t.text_faint),
+            );
+        }
+        if section == "performance" {
+            gpu_status_rows(ui, f.get("__gpuInfo"), f.get("__gpuAdapters"), obj);
+        }
+        ui.add_space(8.0);
+    }
+    if search.trim().is_empty()
+        && has_visible_fields(values, section)
+        && crate::widgets::secondary_button(ui, tl!("Reset Section"), 110.0).clicked()
+        && let Some(mut def) = prefs::Preferences::default().get(section)
+    {
+        // The favourite fonts are the user's library, not a Type setting: kept, as
+        // `prefs.reset {"path": "type"}` keeps them.
+        if section == "type"
+            && let Some(favorites) = values.get(section).and_then(|v| v.get("favoriteFonts")).cloned()
+            && let Some(def) = def.as_object_mut()
+        {
+            def.insert("favoriteFonts".into(), favorites);
+        }
+        values[section] = def;
+    }
+}
+
+/// Preferences: section list on the left, the section's settings on the right. The phone shows the
+/// sections as tabs above the fields instead (`prefs_phone_body`).
+fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>, phone: bool) {
     let t = Tokens::get(ui.ctx());
     let mut section = f.get("section").and_then(Value::as_str).unwrap_or("general").to_string();
     let mut values = f.get("values").cloned().unwrap_or(Value::Null);
@@ -192,6 +274,9 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
         section = (*first).to_string();
     }
     ui.add_space(6.0);
+    if phone {
+        prefs_phone_body(ui, f, &mut section, &mut values, lang, system, &found, &search);
+    } else {
     ui.horizontal_top(|ui| {
         // Section list.
         ui.vertical(|ui| {
@@ -243,42 +328,11 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
             let filter = if show_all { "" } else { search.trim() };
             ui.add_space(6.0);
             egui::ScrollArea::vertical().max_height(content_height - 30.0).id_salt("prefs-scroll").show(ui, |ui| {
-                let order: Vec<String> =
-                    f.get("__order").and_then(|o| o.get(&section)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-                if !has_visible_fields(&values, &section) {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
-                } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
-                    section_fields(ui, &section, obj, &order, lang, system, filter);
-                    if section == "fileHandling" {
-                        ui.label(
-                            RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))
-                                .color(t.text_faint),
-                        );
-                    }
-                    if section == "performance" {
-                        gpu_status_rows(ui, f.get("__gpuInfo"), f.get("__gpuAdapters"), obj);
-                    }
-                    ui.add_space(8.0);
-                }
-                if search.trim().is_empty()
-                    && has_visible_fields(&values, &section)
-                    && crate::widgets::secondary_button(ui, tl!("Reset Section"), 110.0).clicked()
-                    && let Some(mut def) = prefs::Preferences::default().get(&section)
-                {
-                    // The favourite fonts are the user's library, not a Type setting: kept, as
-                    // `prefs.reset {"path": "type"}` keeps them.
-                    if section == "type"
-                        && let Some(favorites) = values.get(&section).and_then(|v| v.get("favoriteFonts")).cloned()
-                        && let Some(def) = def.as_object_mut()
-                    {
-                        def.insert("favoriteFonts".into(), favorites);
-                    }
-                    values[&section] = def;
-                }
+                prefs_fields(ui, f, &mut values, &section, lang, system, &search);
             });
         });
     });
+    }
     f.insert("section".into(), json!(section));
     f.insert("__search".into(), json!(search));
     f.insert("values".into(), values);

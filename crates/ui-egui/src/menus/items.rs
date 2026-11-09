@@ -65,6 +65,10 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     // 2) Our commands that Photoshop's tree doesn't list (or lists under another id).
     let mut extra: Vec<MenuItem> = Vec::new();
     for &(id, label, path, sc) in UI_COMMANDS {
+        // The diagnostic log is saved through the phone build's save service only (see `save_diagnostic_log`).
+        if id == "help.saveLog" && !cfg!(target_os = "android") {
+            continue;
+        }
         extra.push(MenuItem {
             id: id.into(),
             label: label.into(),
@@ -181,11 +185,14 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
-    // Keep the update command with the links, ahead of System Info and About.
+    // Keep the update command with the links, ahead of System Info and About (except on Android,
+    // which has no internet access or update checker).
     if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
         let update = items.remove(at);
-        let before = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about").unwrap_or(items.len());
-        items.insert(before, update);
+        if !cfg!(target_os = "android") {
+            let before = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about").unwrap_or(items.len());
+            items.insert(before, update);
+        }
     }
     // Help: the link items and update check, a separator, then System Info and About.
     if let Some(at) = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about") {

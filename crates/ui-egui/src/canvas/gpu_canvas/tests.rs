@@ -329,6 +329,13 @@ fn canvas_texture_bytes_price_every_tile_and_mip_level() {
 }
 
 #[test]
+#[test]
+fn a_phone_draws_the_document_on_the_cpu() {
+    assert!(super::cpu_canvas_reason(true).is_some());
+    assert!(super::cpu_canvas_reason(false).is_none());
+}
+
+#[test]
 fn view_uniform_packs_rotation() {
     assert_eq!(VIEW_FLOATS, 32);
     assert_eq!(VIEW_UNIFORM_SIZE, 128);

@@ -936,12 +936,23 @@ pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Ma
     // One size on every page (`dialogs::sizing_of`): the list and the page fill its height and
     // scroll when they are taller.
     let height = ui.available_height().max(160.0);
-    ui.horizontal_top(|ui| {
-        boxed(ui, LIST_W, height, |ui, h| {
+    // The effect list beside the parameters, or above them where the dialog is too narrow for both
+    // (the phone layout): there the list takes the dialog's width.
+    let room = ui.available_width();
+    let stacked = crate::mobile::gestures_on(ui.ctx()) && stack_pages(room);
+    let list_w = if stacked { room } else { LIST_W };
+    let layout = if stacked { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
+        boxed(ui, list_w, height, |ui, h| {
             egui::ScrollArea::vertical().id_salt("layer-style-effects").max_height(h - BAR_H).auto_shrink(false).show(ui, |ui| effect_list(ui, f, &selected));
             list_bar(ui, f, &selected);
         });
-        let page_w = ui.available_width() - SIDE_W - ui.spacing().item_spacing.x;
+        if stacked {
+            ui.add_space(6.0);
+            widgets::hairline(ui);
+            ui.add_space(6.0);
+        }
+        let page_w = if stacked { room } else { ui.available_width() - SIDE_W - ui.spacing().item_spacing.x };
         boxed(ui, page_w, height, |ui, h| {
             egui::ScrollArea::vertical()
                 .id_salt("layer-style-page")
@@ -1361,6 +1372,14 @@ mod tests;
 /// Photoshop's column widths: the effect list, the right-hand column (OK, Cancel, New Style…,
 /// Preview, the preview swatch) and a page row's label column.
 const LIST_W: f32 = 200.0;
+/// The parameters' width beside the list.
+const PAGE_W: f32 = 330.0;
+
+/// Does the effect list go above the parameters? It does where the body is narrower than both side
+/// by side, with the rule between them (the phone layout).
+fn stack_pages(room: f32) -> bool {
+    room < LIST_W + 9.0 + PAGE_W + 16.0
+}
 
 const SIDE_W: f32 = 112.0;
 

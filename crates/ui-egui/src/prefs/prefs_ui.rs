@@ -32,6 +32,8 @@ pub struct Runtime {
     saved_value: Option<Value>,
     save_retry: SaveRetry,
     next_autosave_ms: f64,
+    /// On-change autosave: don't retry a failed write before this (ms, [`crate::Services::autosave_on_change`]).
+    on_change_retry_ms: f64,
     /// Last revision whose recovery file was actually written successfully.
     autosaved: HashMap<DocId, u64>,
     /// Queued writes must not masquerade as durable snapshots.

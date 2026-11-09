@@ -52,7 +52,7 @@ pub(super) fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mu
     out.resize(px.len() * bpp, 0);
     #[cfg(not(target_arch = "wasm32"))]
     if px.len() > 1 << 18 {
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
+        let threads = photocraft_doc::cpu::active_cores().min(16);
         let chunk = px.len().div_ceil(threads);
         std::thread::scope(|s| {
             for (src, dst) in px.chunks(chunk).zip(out.chunks_mut(chunk * bpp)) {
@@ -127,6 +127,18 @@ pub(super) fn texel_to_f32(format: wgpu::TextureFormat, b: &[u8]) -> [f32; 4] {
 
 // ---------------------------------------------------------------------------------------------
 // GPU resources
+
+/// Whether the device's memory is shared with the rest of the system (Android phones). There the
+/// document is drawn on the CPU canvas and the wgpu canvas is never created: a PSD open on a
+/// Mali-G720 phone churned the compositor's layer pages and display textures for seconds, then the
+/// driver lost the device, and egui can't draw after that, so the app ended. egui still draws the
+/// interface on the GPU.
+pub const SHARED_GPU_MEMORY: bool = cfg!(target_os = "android");
+
+/// Why the document canvas stays on the CPU on this device (`None`: the wgpu canvas is created).
+pub fn cpu_canvas_reason(shared_memory: bool) -> Option<&'static str> {
+    shared_memory.then_some("phones draw the document on the CPU (GPU memory is shared with the system)")
+}
 
 /// The GPU memory a refresh's layer pages need against what they may hold (bytes).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]

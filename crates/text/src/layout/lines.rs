@@ -144,11 +144,11 @@ fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
                 first,
                 last,
                 font: run.font().clone(),
-                coords: run.normalized_coords().to_vec(),
+                coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
                 size: run.font_size(),
                 rtl: c.is_rtl(),
                 blank: first.is_none() || c.is_space_or_nbsp() || c.text_range().end <= para.prefix.len(),
-                upright: env.vertical && c.first_style().brush.1 != VClass::Rotate as u8,
+                upright: env.vertical && c.style().brush.1 != VClass::Rotate as u8,
                 advance: c.advance() * hs,
                 growth: c.advance() * (hs - 1.0),
                 tab: para.tabs.binary_search(&c.text_range().start).is_ok(),
@@ -408,7 +408,7 @@ impl Para<'_> {
     pub(super) fn place_line(&self, optical: &mut crate::optical::Cache, out: &mut TextLayout, line: &Line<'_>, f: &LineFrame) {
         let env = self.env;
         let m = *line.metrics();
-        let adv = m.advance - m.trailing_whitespace;
+        let adv = m.advance - m.hanging_advance;
         let slots = collect_kern_slots(line, self);
         let mut kern_px = self.kerning(optical, &slots);
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
@@ -457,7 +457,7 @@ impl Para<'_> {
         let face = out.faces.len() as u32;
         out.faces.push(GlyphFace {
             font: run.font().clone(),
-            coords: run.normalized_coords().to_vec(),
+            coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
             size_px: run.font_size(),
             embolden: synthetic_bold(synth.embolden(), st.weight, run.font_attrs().weight.value()),
             skew_deg: synth.skew().unwrap_or(0.0),
@@ -495,8 +495,9 @@ impl Para<'_> {
     /// The glyphs of one run, with the kerning of the clusters before each.
     fn push_glyphs(&self, out: &mut TextLayout, lc: &LineCtx<'_>, state: &mut LineState, gr: &GlyphRun<'_>, face: u32, hs: f32) {
         let run = gr.run();
-        let rm = run.metrics();
-        let vm = if self.env.vertical { Some(VMetrics::new(run.font(), run.normalized_coords(), run.font_size())) } else { None };
+        let rm = run.font_metrics();
+        let normalized_coords: Vec<i16> = run.normalized_coords().iter().map(|c| c.to_bits()).collect();
+        let vm = if self.env.vertical { Some(VMetrics::new(run.font(), &normalized_coords, run.font_size())) } else { None };
         let class = gr.style().brush.1;
         // Glyphs of the run's own characters (not substituted by `vert`).
         let plain: Vec<u32> = match (&vm, class) {

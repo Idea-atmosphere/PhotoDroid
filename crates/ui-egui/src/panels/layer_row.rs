@@ -194,7 +194,9 @@ pub(super) fn layer_row(
     // view, what carries the target brackets, and what spaces the mask's chain from the triangle.
     let compact = l.artboard().is_some() && l.mask.is_none() && l.vector_mask.is_none();
     let (base, row_h) = if compact { (0.0, row_h.min(ARTBOARD_ROW_H)) } else { (base, row_h) };
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+    // A finger on a row swipes the list instead (mobile.rs), so the row takes only clicks then.
+    let row_sense = crate::mobile::row_sense(ctx);
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), row_sense);
     // With thumbnails off no mask thumbnail is drawn, so none may keep catching drags from older frames.
     if base == 0.0 {
         crate::mask_thumbs_ui::forget(ctx, l.id.0);
@@ -395,7 +397,9 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
     let eye_cell = eye_cell(rect);
     // The whole eye column takes drags too (so a drag starting on it never reorders the row): dragging down
     // the eyes gives every row swept over the visibility the first eye toggled to (#8467).
-    let eye_resp = ui.interact(eye_cell, ui.scope_id().with(("eye", l.id.0)), Sense::click_and_drag());
+    // On a touch screen it takes clicks only (see `row_sense`).
+    let eye_sense = crate::mobile::row_sense(ctx);
+    let eye_resp = ui.interact(eye_cell, ui.scope_id().with(("eye", l.id.0)), eye_sense);
     // A hidden layer's eye box is left empty (still clickable; the whole column takes the click, #8467).
     if l.visible {
         // Centre the drawing in the column while preserving the visibility hit area.

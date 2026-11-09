@@ -270,9 +270,17 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
     // fraction of a pixel too wide at a fractional scale widened it on every repaint (#10675).
     let ppp = ui.ctx().pixels_per_point();
     let floor = |v: f32| (v * ppp).floor() / ppp;
-    let area = egui::vec2(floor((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0)), floor((ui.available_height() - 48.0).max(180.0)));
+    // On the phone the settings go under the previews, which take the dialog's width.
+    let room = ui.available_width();
+    let stacked = crate::mobile::gestures_on(ui.ctx()) && room < 600.0 + 10.0 + 250.0;
+    let layout = if stacked { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    let area = if stacked {
+        egui::vec2(room, (room * 0.78).min(470.0))
+    } else {
+        egui::vec2(floor((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0)), floor((ui.available_height() - 48.0).max(180.0)))
+    };
     let (half_w, half_h) = (floor(area.x / 2.0 - 4.0), floor(area.y / 2.0 - 4.0));
-    ui.horizontal_top(|ui| {
+    ui.with_layout(layout, |ui| {
         // Previews grow with the dialog; settings retain their compact width.
         ui.vertical(|ui| {
             ui.set_width(area.x);
@@ -302,7 +310,7 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
         ui.add_space(10.0);
         // Settings scroll independently on smaller windows.
         ui.vertical(|ui| {
-            ui.set_width(250.0);
+            ui.set_width(room.min(250.0));
             egui::ScrollArea::vertical().id_salt("web-settings").max_height(area.y).show(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("Preset")).color(t.text_dim));
                 let mut preset = s(f, "__preset", "");
