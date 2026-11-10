@@ -323,10 +323,6 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
             ui.set_width((ui.available_width() - 12.0).max(340.0));
             let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
             ui.label(RichText::new(tl!(&title)).font(crate::theme::semibold(14.0)).color(t.text));
-            let show_all = search.trim().is_empty()
-                || crate::i18n::Lang::EN.contains_ignore_case(title, search.trim())
-                || lang.contains_ignore_case(tl!(&title), search.trim());
-            let filter = if show_all { "" } else { search.trim() };
             ui.add_space(6.0);
             egui::ScrollArea::vertical().max_height(content_height - 30.0).id_salt("prefs-scroll").show(ui, |ui| {
                 prefs_fields(ui, f, &mut values, &section, lang, system, &search);

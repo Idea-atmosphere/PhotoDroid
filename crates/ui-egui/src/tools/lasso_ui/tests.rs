@@ -462,6 +462,8 @@ fn alt_clicking_the_last_corner_of_a_small_shape_does_not_close_it() {
     let b = app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
     let close_to = |v: i32, want: i32| v.abs_diff(want) <= 1;
     assert!(close_to(b.x0, 100) && close_to(b.y0, 100) && close_to(b.x1, 106) && close_to(b.y1, 106), "a square, not a triangle: {b:?}");
+}
+
 /// On the phone a lift leaves the outline open; the next touch goes on, ↶ takes the last piece away, and coming back
 /// to the first point closes it.
 #[test]

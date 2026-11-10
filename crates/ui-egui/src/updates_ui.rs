@@ -124,7 +124,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", target_os = "android"))]
 pub(crate) fn show(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
