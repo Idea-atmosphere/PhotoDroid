@@ -1,5 +1,5 @@
 use super::defaults::{apply, apply_defaults, default_styles, formatting_params, open_color_picker, shown_scale, target, type_unit};
-use super::fonts::{axis_sliders, font_picker, fonts_ready, selected_style, style_label, styles};
+use super::fonts::{axis_sliders, font_picker_salted, fonts_ready, selected_style, style_label, styles};
 use super::options_bar::{
     align_glyph, apply_kerning, direction_glyph, direction_items, icon_label, kerning_at, kerning_field, kerning_label, num_field, shown_family, styles_at,
     toggle_cell,
@@ -234,7 +234,7 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         let mut ready = true;
         row(ui, &mut |ui| {
             ready = fonts_ready(ui, full);
-            if ready && let Some(picked) = font_picker(app, ui, &mut fam, full) {
+            if ready && let Some(picked) = font_picker_salted(app, ui, &mut fam, full, "character-font") {
                 app.ui.tool_options.type_font = fam.clone();
                 match picked {
                     Some(style) => {

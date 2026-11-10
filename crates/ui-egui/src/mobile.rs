@@ -1060,7 +1060,7 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let items = menus::menu_items(app);
     let mut query: String = ctx.data(|d| d.get_temp::<String>(menu_query_id())).unwrap_or_default();
     let mut path: Vec<String> = ctx.data(|d| d.get_temp::<Vec<String>>(menu_path_id())).unwrap_or_default();
-    let mut picked: Option<String> = None;
+    let mut picked: Option<(String, bool)> = None;
     let mut close = false;
     let screen = ctx.content_rect();
     let viewport = ctx.viewport_rect();
@@ -1159,8 +1159,11 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     ctx.data_mut(|d| d.insert_temp(menu_query_id(), query));
     ctx.data_mut(|d| d.insert_temp(menu_path_id(), path));
-    if let Some(cmd) = picked {
-        close = true;
+    if let Some((cmd, checkable)) = picked {
+        // A checkable command (a Type > OpenType toggle, say) runs in place: the sheet stays
+        // open so its tick is seen changing, and a second tap undoes it. Anything else runs
+        // and closes the sheet, as before.
+        close = !checkable;
         if let Err(e) = menus::invoke(app, ctx, &cmd, menu_params(&cmd)) {
             let _ = notices::post(app, "PhotoDroid", vec![e], true, None);
         }
@@ -1321,11 +1324,11 @@ fn back_button(ui: &mut egui::Ui, tooltip: &str) -> bool {
 }
 
 /// A command's row in the menu sheet. A command the sheet cannot run is shown dimmed and does nothing.
-fn command_row(ui: &mut egui::Ui, item: &menus::MenuItem, lang: i18n::Lang, picked: &mut Option<String>, detail: &str) {
+fn command_row(ui: &mut egui::Ui, item: &menus::MenuItem, lang: i18n::Lang, picked: &mut Option<(String, bool)>, detail: &str) {
     let enabled = item.enabled;
     let label = i18n::tr(lang, &item.label);
     if menu_row(ui, label, detail, item.checked == Some(true), enabled, false).clicked() && enabled {
-        *picked = Some(item.id.clone());
+        *picked = Some((item.id.clone(), item.checked.is_some()));
     }
 }
 
@@ -1357,7 +1360,7 @@ fn window_room(screen: Vec2) -> f32 {
 /// OpenType) change every type layer of the document, as a PSD's texts are meant to share them;
 /// the desktop menus pass nothing and change the active layer only.
 fn menu_params(id: &str) -> serde_json::Value {
-    if id.starts_with("type.antiAlias.") || id.starts_with("type.orientation.") || id.starts_with("type.openType.") {
+    if id.starts_with("type.antiAlias.") || id.starts_with("type.orientation.") {
         json!({"allTextLayers": true})
     } else {
         json!({})
@@ -1634,7 +1637,7 @@ mod tests {
     fn the_phone_menu_sends_the_type_options_to_every_type_layer_and_nothing_else() {
         assert_eq!(menu_params("type.antiAlias.strong"), json!({"allTextLayers": true}));
         assert_eq!(menu_params("type.orientation.vertical"), json!({"allTextLayers": true}));
-        assert_eq!(menu_params("type.openType.oldstyle"), json!({"allTextLayers": true}));
+        assert_eq!(menu_params("type.openType.oldstyle"), json!({}));
         assert_eq!(menu_params("type.createWorkPath"), json!({}));
         assert_eq!(menu_params("type.panels.characterStyles"), json!({}));
         assert_eq!(menu_params("layer.flatten"), json!({}));
