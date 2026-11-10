@@ -271,6 +271,34 @@ impl eframe::App for PhotocraftApp {
         if let Some(menu) = self.services.native_menu.as_mut() {
             menu.raw_input(raw_input);
         }
+        // The phone's virtual keyboard queues its events for this frame (`virtual_input.rs`).
+        // They take the hardware's route, so the clipboard keys below apply to them as well.
+        raw_input.events.extend(self.virtual_input.take_events());
+        // The virtual mouse turns a finger's touches on the canvas into a pointer's presses and
+        // moves (`virtual_mouse.rs`). A press on the canvas is the canvas's only where no window
+        // floats over it.
+        let now = raw_input.time.unwrap_or_else(|| ctx.input(|i| i.time));
+        let canvas = self.last_canvas_rect;
+        // The phone's top bar is drawn on the background layer too, so the canvas test leaves it
+        // out: a finger on its buttons goes to the screen, and the pointer can press them.
+        let top = crate::mobile::top_bar_rect(ctx);
+        let on_canvas = |p: egui::Pos2| {
+            canvas.contains(p) && !top.is_some_and(|t| t.contains(p)) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
+        };
+        // The pointer may go up from the canvas into the top bar, so that its buttons can be pressed with it.
+        let reach = top.map_or(canvas, |t| {
+            egui::Rect::from_min_max(egui::pos2(canvas.left().min(t.left()), t.top()), egui::pos2(canvas.right().max(t.right()), canvas.bottom()))
+        });
+        let mods = self.virtual_input.modifiers();
+        let done = self.virtual_mouse.process(std::mem::take(&mut raw_input.events), reach, now, mods, on_canvas);
+        raw_input.events = done.events;
+        if self.phone_layout {
+            crate::mobile::sanitize_touch_events(ctx, raw_input);
+        }
+        if done.clicked {
+            // A click spends a modifier the keyboard holds for one key only, as a key press does.
+            self.virtual_input.spend_once();
+        }
         // While a text field of a floating panel's own window has the keyboard, the dock area
         // hands that window the text keys in this input and converts them there.
         if craft_ui::docking::typing_window(ctx).is_none() {

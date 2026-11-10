@@ -77,7 +77,18 @@ impl PhotocraftApp {
         shape_stroke_ui::sync_editor(self, ctx);
         crate::dock::persist_pending(self, ctx);
         prefs_ui::tick(self, ctx);
-        updates_ui::tick(self, ctx);
+        crate::virtual_input::logic(self, ctx);
+        // The phone's diagnostic log is written to Downloads as it grows (see `menus::tick_diagnostic_log`).
+        crate::menus::tick_diagnostic_log(self, ctx);
+        // The pointer eases to where the finger put it, and no input comes meanwhile
+        // (`virtual_mouse.rs`). The next frame comes at the screen's own rate (90 or 120 Hz on
+        // many phones), so the glide is as smooth as the screen allows.
+        if self.virtual_mouse.wants_frames() {
+            ctx.request_repaint();
+        }
+        if !cfg!(target_os = "android") && !self.phone_layout {
+            updates_ui::tick(self, ctx);
+        }
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
@@ -284,26 +295,37 @@ impl PhotocraftApp {
         // The OS title bar (and the taskbar / Alt-Tab entry) follows the active file; with the
         // system title bar this is where the document name lives, as the in-app title is hidden.
         panels::sync_window_title(self, &ctx);
-        let chrome = !self.ui.view.hides_chrome();
+        // A phone keeps its bars whatever the screen mode: it has no key to leave full screen by.
+        let phone = crate::mobile::active(self, &ctx);
+        // The touch gestures are the phone layout's: elsewhere a touch screen keeps the mouse's behaviour.
+        crate::mobile::set_gestures(&ctx, phone);
+        let chrome = !self.ui.view.hides_chrome() || phone;
         if chrome {
             self.ui.panels.full_screen_chrome = false;
         }
         // In Full Screen Mode, Tab shows the menu bar, options bar, toolbar and dock (#6760).
-        let tabbed_in = !chrome && self.ui.panels.full_screen_chrome;
-        if (chrome || tabbed_in) && self.ui.panels.menu_bar {
+        let tabbed_in = !chrome && self.ui.panels.full_screen_chrome && !phone;
+        // The virtual mouse is the phone's (`mobile.rs`). Off the phone it passes every event
+        // and draws nothing, and its pointer keeps its place until the phone layout comes back.
+        self.virtual_mouse.set_covered(!phone);
+        let desk = chrome && !phone;
+        if phone {
+            crate::mobile::chrome(self, ui);
+        }
+        if (desk || tabbed_in) && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
         // Home is only the menu bar and the Home content; the saved panel prefs are untouched.
         let home = self.home_screen_up();
-        if ((chrome && self.ui.panels.options_bar) || tabbed_in) && !home {
+        if ((desk && self.ui.panels.options_bar) || tabbed_in) && !home {
             panels::options_bar(self, ui);
         }
-        if chrome && self.ui.panels.status_bar && !home {
+        if desk && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);
         }
-        let toolbar_shown = ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home;
+        let toolbar_shown = ((desk && self.ui.panels.toolbar) || tabbed_in) && !home;
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
-        let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
+        let docking = ((desk && self.ui.panels.dock) || tabbed_in) && !home;
         let toolbar_side = self.ui.panels.toolbar_side.resolve();
         let toolbar_right = toolbar_side == crate::state::ToolbarSide::Right;
         // The compact layout stacks the dock, rail and toolbar on the dock's physical edge.
