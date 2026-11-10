@@ -218,6 +218,7 @@ fn prefs_fields(
     system: Option<egui::Theme>,
     search: &str,
 ) {
+    let t = crate::theme::Tokens::get(ui.ctx());
     let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, name)| *name);
     let show_all = search.trim().is_empty()
         || crate::i18n::Lang::EN.contains_ignore_case(title, search.trim())

@@ -12,8 +12,6 @@ pub const ARTCRAFT_WEBSITE: &str = "https://getartcraft.com";
 pub const TELEGRAM: &str = "https://t.me/Idea_atmosphere";
 pub const APP_PAGE: &str = "https://getartcraft.com/apps/photocraft";
 pub const TUTORIALS: &str = "https://getartcraft.com/tutorials";
-pub const GITHUB: &str = "https://github.com/storytold/photocraft";
-pub const ISSUES: &str = "https://github.com/storytold/photocraft/issues";
 pub const GITHUB: &str = "https://github.com/Idea-atmosphere/PhotoDroid";
 pub const ISSUES: &str = "https://github.com/Idea-atmosphere/PhotoDroid/issues";
 /// The original PhotoCraft project this Android port comes from.

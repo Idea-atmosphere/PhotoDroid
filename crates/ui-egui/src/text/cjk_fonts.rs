@@ -919,7 +919,7 @@ fn baseline_offset(face: (f32, f32, f32), primary: (f32, f32, f32)) -> f32 {
 }
 
 /// Registers `name` at the lowest priority in every font family.
-fn add_to_all_families(ctx: &egui::Context, name: String, mut data: FontData) {
+pub(crate) fn add_to_all_families(ctx: &egui::Context, name: String, mut data: FontData) {
     // Align to Inter, the primary of every UI family; JetBrains Mono differs by under 0.005em.
     let primary = ctx.fonts(|f| f.definitions().font_data.get("Inter").and_then(|p| vertical_metrics(p.bytes(), p.index)));
     if let (Some(face), Some(primary)) = (vertical_metrics(data.bytes(), data.index), primary) {

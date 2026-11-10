@@ -1025,7 +1025,8 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                 });
             });
-            crate::dock::show(app, ui, &[group], panels::dock_body);
+            let tab = *group.tab_mut(&mut app.ui.dock_tabs.clone());
+            crate::panels::dock_body(app, ui, group, tab);
         });
     if close {
         set_flag(&ctx, sheet_open_id(), false);
@@ -1482,7 +1483,7 @@ fn slot_tool(ui: &egui::Ui, current: crate::state::Tool, slot: &[crate::state::T
         ui.data_mut(|d| d.insert_temp(key, current));
         return current;
     }
-    ui.data(|d| d.get_temp::<Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
+    ui.data(|d| d.get_temp::<crate::state::Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
 }
 
 #[cfg(test)]

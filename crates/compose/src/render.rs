@@ -129,7 +129,7 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
                 });
             });
         }
-    }
+    }});
     #[cfg(target_arch = "wasm32")]
     for (i, band) in out.px.chunks_mut(band_len).enumerate() {
         let y0 = rect.y0 + i as i32 * tile;
@@ -138,7 +138,7 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
         }
     }
     out
-})
+}
 
 /// Runs `f` with this thread's document blend flags set ([`psblend::LAB_MIX`], [`psblend::HDR`]),
 /// then restores the values they had (also on unwind): a nested rayon job can run another tile

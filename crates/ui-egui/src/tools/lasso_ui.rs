@@ -243,6 +243,7 @@ pub fn commit(app: &mut PhotocraftApp) {
 }
 
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
+    let phone = app.phone_layout;
     cancel_stale(app);
     let tool = app.ui.tool;
     if !owns(tool) || handed_over(app) {

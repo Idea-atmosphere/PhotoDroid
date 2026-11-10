@@ -255,7 +255,7 @@ fn rotate_to_text_space(glyphs: &mut [PlacedGlyph], vinfo: &[VGlyph], baseline: 
 
 /// Underline and strikethrough rects of one run.
 fn push_decorations(out: &mut TextLayout, vertical: bool, gr: &GlyphRun<'_>, baseline: f32, shift: f32, span: &RunSpan) {
-    let rm = gr.run().metrics();
+    let rm = gr.run().font_metrics();
     let (x0, x1, si) = (span.x0, span.x1, span.style);
     if vertical {
         // Underline to the right of the column, strikethrough through its centre
