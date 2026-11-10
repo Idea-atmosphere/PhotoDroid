@@ -526,6 +526,8 @@ fn number_rows(lang: Lang) -> Vec<Vec<KeyDef>> {
         typing("&", Key::Num7, "&").forced(),
         typing("@", Key::Num2, "@").forced(),
         typing("\"", Key::Quote, "\"").forced(),
+        typing("[", Key::OpenBracket, "["),
+        typing("]", Key::CloseBracket, "]"),
     ];
     let more = vec![
         typing(".", Key::Period, "."),
@@ -536,6 +538,8 @@ fn number_rows(lang: Lang) -> Vec<Vec<KeyDef>> {
         typing("+", Key::Equals, "+").forced(),
         typing("'", Key::Quote, "'"),
         typing("_", Key::Minus, "_").forced(),
+        typing("{", Key::OpenBracket, "{").forced(),
+        typing("}", Key::CloseBracket, "}").forced(),
         pressing("", Some("delete"), Key::Backspace, 2.0),
     ];
     vec![figures, symbols, more]

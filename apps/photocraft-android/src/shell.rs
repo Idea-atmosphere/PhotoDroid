@@ -219,6 +219,7 @@ impl AndroidShell {
                     self.link.notify(true, text);
                 }
                 Some(protocol::Event::Done) => self.link.set_picking(false),
+                Some(protocol::Event::SaveAs { name, uri }) => self.link.resolve_save_as(name, uri),
                 Some(protocol::Event::FontsChanged) => {
                     warm_user_fonts(self.font_dir.clone(), self.font_ctx.clone());
                 }

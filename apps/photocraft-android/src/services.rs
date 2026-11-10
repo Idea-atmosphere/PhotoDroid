@@ -81,6 +81,11 @@ pub struct Link {
     pub inbox: Inbox,
     messages: Arc<Mutex<Vec<Message>>>,
     picking: Arc<AtomicBool>,
+    /// A Save As dialog waiting for the system create-document picker, with the suggested name.
+    pending_save: Arc<Mutex<Option<(FileDialogReply, String)>>>,
+    /// Display name -> content URI chosen in the Save As picker, so the write that follows the
+    /// dialog (and later plain Saves of that name) go to the user's chosen location.
+    save_targets: Arc<Mutex<HashMap<String, String>>>,
     /// The transparent Android IME view is active, so its event queue needs regular frames.
     keyboard: Arc<AtomicBool>,
     ctx: egui::Context,
@@ -92,6 +97,8 @@ impl Link {
             inbox: Inbox::default(),
             messages: Arc::default(),
             picking: Arc::default(),
+            pending_save: Arc::default(),
+            save_targets: Arc::default(),
             keyboard: Arc::default(),
             ctx,
         }
@@ -131,6 +138,38 @@ impl Link {
         self.ctx.request_repaint();
     }
 
+    /// The name -> chosen-URI map the saver writes through (see `Saver::save`).
+    pub fn save_targets(&self) -> Arc<Mutex<HashMap<String, String>>> {
+        self.save_targets.clone()
+    }
+
+    /// Ask the activity for a create-document (Save As) picker; the dialog's reply is held
+    /// until the picker answers through [`Self::resolve_save_as`].
+    fn start_save_as(&self, reply: FileDialogReply, suggested: &str) {
+        let name = protocol::file_name(suggested);
+        *locked(&self.pending_save) = Some((reply, name.clone()));
+        let argument = protocol::join_fields(&[&name, protocol::mime_type(&name)]);
+        if let Err(e) = platform::call("save_as", &argument).and_then(|r| protocol::parse_reply(&r)) {
+            if let Some((reply, _)) = locked(&self.pending_save).take() {
+                reply.send(None);
+            }
+            self.notify(true, format!("The Save As picker could not be opened: {e}"));
+        }
+    }
+
+    /// The Save As picker answered: confirm the held dialog with the chosen name (recording
+    /// where writes of that name must go), or cancel it when the user backed out.
+    pub fn resolve_save_as(&self, name: String, uri: String) {
+        let Some((reply, suggested)) = locked(&self.pending_save).take() else { return };
+        if uri.is_empty() {
+            reply.send(None);
+            return;
+        }
+        let chosen = if name.is_empty() { suggested } else { protocol::file_name(&name) };
+        locked(&self.save_targets).insert(chosen.clone(), uri);
+        reply.send(Some(FileDialogAnswer::SaveTo(chosen)));
+    }
+
     fn start_picker(&self) {
         self.set_picking(true);
         if let Err(e) = platform::call("open", "").and_then(|reply| protocol::parse_reply(&reply)) {
@@ -152,7 +191,7 @@ fn locked<T>(queue: &Mutex<T>) -> MutexGuard<'_, T> {
 /// document, so it gets a message instead and is cancelled.
 fn file_dialog(link: Link) -> FileDialogFn {
     Box::new(move |request: FileDialogRequest, _parent: Option<&eframe::Frame>, reply: FileDialogReply| match request {
-        FileDialogRequest::Save { suggested } => reply.send(Some(FileDialogAnswer::SaveTo(protocol::file_name(&suggested)))),
+        FileDialogRequest::Save { suggested } => link.start_save_as(reply, &suggested),
         FileDialogRequest::Open { multiple: true, .. } => {
             link.start_picker();
             reply.send(None);
@@ -170,7 +209,7 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
     let (autosave_store, results_store, flush_store, discard_store, adopt_store) =
         (store.clone(), store.clone(), store.clone(), store.clone(), store);
     let recovery_dir = dirs.recovery();
-    let saver = Rc::new(Saver::new(dirs.staging(), dirs.export_index()));
+    let saver = Rc::new(Saver::new(dirs.staging(), dirs.export_index(), link.save_targets()));
     let saver_for_debug = saver.clone();
     let (debug_root, cpu_root) = (dirs.root().to_path_buf(), dirs.root().to_path_buf());
     let (prefs_load, prefs_save) = (dirs.preferences(), dirs.preferences());
@@ -303,20 +342,40 @@ struct Saver {
     staging: PathBuf,
     index: PathBuf,
     saved: RefCell<HashMap<String, String>>,
+    /// Display name -> content URI from the Save As picker (shared with the dialog service).
+    targets: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl Saver {
-    fn new(staging: PathBuf, index: PathBuf) -> Self {
+    fn new(staging: PathBuf, index: PathBuf, targets: Arc<Mutex<HashMap<String, String>>>) -> Self {
         let saved = std::fs::read_to_string(&index).map(|text| protocol::parse_index(&text)).unwrap_or_default();
-        Self { staging, index, saved: RefCell::new(saved) }
+        Self { staging, index, saved: RefCell::new(saved), targets }
     }
 
     fn save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let name = protocol::file_name(path);
+        // A name the user placed with the Save As picker: write to that exact URI instead of
+        // the default Projects/Output folder, with no storage permission involved.
+        let target = locked(&self.targets).get(&name).cloned();
+        if let Some(uri) = target {
+            return self.save_to_uri(&name, &uri, bytes);
+        }
         let command = if protocol::is_project_file(&name) { "save_project" } else { "save_output" };
         // Keep the existing bare-name key: after an upgrade, the previous root-level copy is
         // replaced only after the new copy in Projects/Output is complete.
         self.save_as(command, &name, &name, bytes)
+    }
+
+    /// Write to the exact content URI the user picked in the Save As picker.
+    fn save_to_uri(&self, name: &str, uri: &str, bytes: &[u8]) -> Result<(), String> {
+        let staged = self.stage(name, bytes)?;
+        let staged_path = staged.to_string_lossy().into_owned();
+        let argument = protocol::join_fields(&[name, protocol::mime_type(name), staged_path.as_str(), uri]);
+        let reply = platform::call("save_to_uri", &argument);
+        let _ = std::fs::remove_file(&staged);
+        protocol::parse_reply(&reply?).map_err(|e| format!("{name} could not be saved: {e}"))?;
+        self.saved.borrow_mut().insert(name.to_string(), uri.to_string());
+        Ok(())
     }
 
     fn save_log(&self, name: &str, bytes: &[u8]) -> Result<(), String> {

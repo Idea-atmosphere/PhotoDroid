@@ -531,7 +531,11 @@ pub(crate) fn family_picker_in(
         // frame: never wider, so the menu has no empty strip beside the list.
         let body_id = field.with("body");
         let class_w = crate::font_filters::CLASS_COLUMN_WIDTH;
-        let estimate = FONT_LIST_WIDTH + 16.0 + if filters.hide_classes { 0.0 } else { class_w + 14.0 };
+        // On a narrow (phone) screen the fixed 420pt list ran off the right edge and clipped
+        // the style names: shrink the list to the room the screen actually leaves for it.
+        let class_room = if filters.hide_classes { 0.0 } else { class_w + 14.0 };
+        let list_w = FONT_LIST_WIDTH.min((ui.ctx().content_rect().width() - 48.0 - class_room).max(140.0));
+        let estimate = list_w + 16.0 + class_room;
         let body: Option<egui::Rect> = ui.data(|d| d.get_temp(body_id));
         let menu_width = body.map_or(estimate, |b| b.width());
         // Divider lines span the space they are given: cap it, or they stretch the menu.
@@ -601,6 +605,16 @@ pub(crate) fn family_picker_in(
         let row_h = preview.map_or(28.0, |(_, [_, h])| (h + 4.0).max(28.0));
         let expanded_id = field.with("expanded");
         let mut expanded: Vec<String> = ui.data(|d| d.get_temp(expanded_id)).unwrap_or_default();
+        // Two-tap picking on a phone: the first tap only selects the family and shows it in
+        // the preview banner above; a second tap on that same family applies it and closes.
+        // A mouse keeps the one-click behaviour (and so do the tests, which never set the
+        // phone-gesture flag).
+        let two_tap = crate::mobile::gestures_on(ui.ctx());
+        let tapped_id = field.with("tapped-family");
+        if !was_open {
+            ui.data_mut(|d| d.remove::<String>(tapped_id));
+        }
+        let mut tapped_family: Option<String> = if two_tap { ui.data(|d| d.get_temp(tapped_id)) } else { None };
         let mut hovered: Option<String> = None;
         let reveal = if stepped.is_some() { None } else { reveal };
         let mut reveal_top: Option<egui::Rect> = None;
@@ -628,7 +642,7 @@ pub(crate) fn family_picker_in(
             // Top to bottom, though the list sits beside the class list.
             let shown = list.show(ui, |ui| {
                 ui.vertical(|ui| {
-                    ui.set_width(FONT_LIST_WIDTH);
+                    ui.set_width(list_w);
                     let weak = |ui: &mut egui::Ui, text: &str| {
                         ui.label(egui::RichText::new(text).weak());
                     };
@@ -655,7 +669,7 @@ pub(crate) fn family_picker_in(
                         }
                         // Only rows on screen read their font's format and styles, and an expanded
                         // family: its style rows stay listed when its own row scrolls out of view.
-                        let visible = ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(FONT_LIST_WIDTH, row_h)));
+                        let visible = ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(list_w, row_h)));
                         let format = if visible { lookup(f).map(|t| t.format) } else { None };
                         let open = !recent_row && expanded.contains(f);
                         let styles = if visible || open { library.styles_of(f) } else { Vec::new() };
@@ -664,12 +678,13 @@ pub(crate) fn family_picker_in(
                         // row's stroke grew it and pushed the rows below down (#7406).
                         let slot = preview.map_or(0.0, |(size, _)| crate::font_preview::slot_width(ui.ctx(), f, size));
                         // One row lit, though a recent family is listed twice.
-                        let mut button = egui::Button::selectable(selected == Some(i), shown).truncate().stroke(egui::Stroke::NONE);
+                        let mut button =
+                            egui::Button::selectable(selected == Some(i) || tapped_family.as_deref() == Some(f.as_str()), shown).truncate().stroke(egui::Stroke::NONE);
                         let [_, h] = preview.map_or([0.0, 16.0], |(_, b)| b);
                         button =
                             button.right_text(egui::Atom::custom(egui::IdSalt::new(("font-sample", f, recent_row)), egui::vec2(slot + FONT_BADGE_WIDTH, h)));
                         let response = ui
-                            .allocate_ui_with_layout(egui::vec2(FONT_LIST_WIDTH, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            .allocate_ui_with_layout(egui::vec2(list_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = 2.0;
                                 // The star adds the font to (or removes it from) the favourites; it never picks it.
                                 let tip = if favorite { tl!("Remove from Favorites") } else { tl!("Add to Favorites") };
@@ -729,13 +744,21 @@ pub(crate) fn family_picker_in(
                             hovered = Some(f.clone());
                         }
                         if press.chosen(ui, &response) {
-                            changed = true;
-                            current.clone_from(f);
-                            // A served family not fetched yet: start now, before any text needs it.
-                            photocraft_text::served::request(f);
-                            picked = true;
-                            hovered = None;
-                            ui.close();
+                            if two_tap && tapped_family.as_deref() != Some(f.as_str()) {
+                                // First tap: select + preview only, nothing applied yet.
+                                tapped_family = Some(f.clone());
+                                edit.row = Some(i);
+                                hovered = Some(f.clone());
+                            } else {
+                                tapped_family = None;
+                                changed = true;
+                                current.clone_from(f);
+                                // A served family not fetched yet: start now, before any text needs it.
+                                photocraft_text::served::request(f);
+                                picked = true;
+                                hovered = None;
+                                ui.close();
+                            }
                         }
                         if !open {
                             continue;
@@ -781,6 +804,10 @@ pub(crate) fn family_picker_in(
         ui.data_mut(|d| {
             d.insert_temp(filters_id, filters);
             d.insert_temp(expanded_id, expanded);
+            match &tapped_family {
+                Some(f) => d.insert_temp(tapped_id, f.clone()),
+                None => d.remove::<String>(tapped_id),
+            }
             d.insert_temp(body_id, body.translate(egui::vec2(-origin, 0.0)));
             if let Some(f) = &hovered {
                 d.insert_temp(preview_id, f.clone());

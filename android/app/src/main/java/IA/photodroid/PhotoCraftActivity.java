@@ -80,6 +80,7 @@ public class PhotoCraftActivity extends NativeActivity {
     private static final char SEP = '\u001f';
     private static final int REQUEST_OPEN = 0x5043;
     private static final int REQUEST_USER_TREE = 0x5044;
+    private static final int REQUEST_SAVE_AS = 0x5045;
     private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/PhotoCraft";
     private static final String PROJECT_FOLDER = EXPORT_FOLDER + "/Projects";
     private static final String OUTPUT_FOLDER = EXPORT_FOLDER + "/Output";
@@ -494,6 +495,11 @@ public class PhotoCraftActivity extends NativeActivity {
                 case "open":
                     launchOpen();
                     return ok("");
+                case "save_as":
+                    launchSaveAs(argument);
+                    return ok("");
+                case "save_to_uri":
+                    return ok(saveToUri(argument));
                 case "poll": {
                     String event = events.poll();
                     return event == null ? "" : event;
@@ -548,6 +554,64 @@ public class PhotoCraftActivity extends NativeActivity {
                 events.add("done");
             }
         });
+    }
+
+    /** The name suggested to the Save As picker, used if the provider reports none. */
+    private volatile String pendingSaveName = "";
+
+    /**
+     * Save As: the system's create-document picker. The user chooses the folder and the file
+     * name; the app needs no storage permission because the system grants write access to
+     * exactly that one document. The choice comes back as a "saveas" event.
+     */
+    @SuppressWarnings("deprecation")
+    private void launchSaveAs(String argument) {
+        String[] fields = argument.split(String.valueOf(SEP), -1);
+        final String name = fields.length > 0 && !fields[0].isEmpty() ? fields[0] : "PhotoCraft";
+        final String mime = fields.length > 1 && !fields[1].isEmpty() ? fields[1] : "application/octet-stream";
+        pendingSaveName = name;
+        runOnUiThread(() -> {
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType(mime);
+            intent.putExtra(Intent.EXTRA_TITLE, name);
+            try {
+                startActivityForResult(intent, REQUEST_SAVE_AS);
+            } catch (RuntimeException e) {
+                events.add(join("saveas", "", ""));
+                events.add(join("error", "", "No file picker is available: " + describe(e)));
+            }
+        });
+    }
+
+    /** Write the staged bytes to the exact document the Save As picker created. */
+    private String saveToUri(String argument) throws IOException {
+        String[] fields = argument.split(String.valueOf(SEP), -1);
+        if (fields.length != 4) {
+            throw new IOException("malformed save-to-uri request");
+        }
+        Uri target = Uri.parse(fields[3]);
+        try (InputStream in = new FileInputStream(fields[2]);
+             OutputStream out = getContentResolver().openOutputStream(target, "wt")) {
+            if (out == null) {
+                throw new IOException("could not write " + fields[0]);
+            }
+            copy(in, out);
+        }
+        return target.toString();
+    }
+
+    private void onSaveAsResult(int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            events.add(join("saveas", "", ""));
+            return;
+        }
+        Uri uri = data.getData();
+        String name = displayName(getContentResolver(), uri);
+        if (name == null || name.isEmpty()) {
+            name = pendingSaveName;
+        }
+        events.add(join("saveas", name, uri.toString()));
     }
 
     /** Ask once for read access to the exact public folder; the grant survives later launches. */
@@ -628,6 +692,10 @@ public class PhotoCraftActivity extends NativeActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_USER_TREE) {
             onUserTreeResult(resultCode, data);
+            return;
+        }
+        if (requestCode == REQUEST_SAVE_AS) {
+            onSaveAsResult(resultCode, data);
             return;
         }
         if (requestCode != REQUEST_OPEN) {

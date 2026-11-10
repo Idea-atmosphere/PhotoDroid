@@ -35,6 +35,9 @@ pub enum Event {
     Key { name: String, pressed: bool, repeat: bool },
     /// A privacy-safe keyboard milestone. It describes the callback, never the typed text.
     KeyboardStatus(String),
+    /// The Save As picker finished: the display `name` and content `uri` the user chose
+    /// (both empty when the user backed out).
+    SaveAs { name: String, uri: String },
 }
 
 /// Parse one event line. `None` for an unknown kind (and for an empty line).
@@ -68,6 +71,7 @@ pub fn parse_event(line: &str) -> Option<Event> {
             Some(Event::Key { name, pressed, repeat })
         }
         "kbd" if !rest.is_empty() => Some(Event::KeyboardStatus(rest)),
+        "saveas" => Some(Event::SaveAs { name, uri: rest }),
         _ => None,
     }
 }
