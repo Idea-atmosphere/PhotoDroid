@@ -703,7 +703,13 @@ fn collapsed_tool_strip(app: &PhotocraftApp, ui: &mut egui::Ui) {
     let bottom = screen.bottom() - virtual_input::lift(app);
     let position = egui::pos2(screen.center().x - 24.0, bottom - 44.0);
     egui::Area::new(egui::Id::unique("phone-tools-restore"))
+        // A floating area otherwise has no parent in the accessibility tree, so its button
+        // cannot be found by keyboard/accessibility clients or the phone UI harness.
+        .accessibility_parent(ui.unique_id())
         .order(egui::Order::Foreground)
+        .movable(false)
+        .fade_in(false)
+        .default_size(vec2(48.0, 44.0))
         .fixed_pos(position)
         .show(&ctx, |ui| {
             let t = Tokens::get(ui.ctx());
