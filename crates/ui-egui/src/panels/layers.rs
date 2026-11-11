@@ -242,20 +242,6 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         inactive_blend_rows(ui, t.pro);
     }
 
-    // A touch-accessible alternative to holding a row: use the very same full layer menu and
-    // selection semantics as right-clicking the active layer. Desktop retains its existing UI.
-    if crate::mobile::gestures_on(ui.ctx()) && let Some(layer) = active_layer {
-        let button = icons::button(ui, "ellipsis", 36.0, false, tl!("Layer context menu"));
-        egui::Popup::menu(&button).show(|ui| {
-            crate::widgets::style_spectrum_popup_menu(ui);
-            if crate::layer_menu_ui::show(app, ui, layer, selection.len() > 1 && selection.contains(&layer.id), &mut actions)
-                && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), layer.id.0, &layer.name)
-            {
-                actions.push(done);
-            }
-        });
-    }
-
     // Top of the stack first, groups above their contents, closed groups' contents hidden (#126).
     let rows = crate::layer_tree_ui::panel_rows(app, &doc);
     let ctx = ui.ctx().clone();
@@ -539,6 +525,21 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let can_link = app.session.is_enabled("layer.linkLayers");
         if ui.add_enabled_ui(can_link, |ui| icons::button(ui, "link-2", 26.0, false, tl!("Link layers"))).inner.clicked() {
             actions.push(("layer.linkLayers".into(), json!({})));
+        }
+        // The footer lays its usual buttons out from the right. Put the touch-only context menu
+        // at its unused left edge, rather than taking a whole row away from the layer list.
+        if crate::mobile::gestures_on(ui.ctx()) && let Some(layer) = active_layer {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let button = icons::button(ui, "ellipsis", 28.0, false, tl!("Layer context menu"));
+                egui::Popup::menu(&button).show(|ui| {
+                    crate::widgets::style_spectrum_popup_menu(ui);
+                    if crate::layer_menu_ui::show(app, ui, layer, selection.len() > 1 && selection.contains(&layer.id), &mut actions)
+                        && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), layer.id.0, &layer.name)
+                    {
+                        actions.push(done);
+                    }
+                });
+            });
         }
     });
     for (id, p) in actions {

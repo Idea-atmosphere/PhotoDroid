@@ -3,7 +3,7 @@
 //! On a phone the desktop chrome (menu bar, options bar, tool column, status bar, dock) leaves
 //! almost no room for the picture. This layout keeps the same panels in other places:
 //!
-//! - a top bar: the menus button, the document's name and status line, undo, redo, the toggles of
+//! - a top bar: the menus and phone settings buttons, undo, redo, the toggles of
 //!   the virtual mouse and the virtual keyboard, and the panels button;
 //! - at the bottom, when the keyboard is on, the virtual keyboard ([`crate::virtual_input`]); then
 //!   the options of the active tool, and under them a strip of every tool, with 44 pt touch targets
@@ -145,7 +145,11 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let covered = !app.ui.dialogs.is_empty() || is_set(ui.ctx(), menu_open_id());
     app.virtual_mouse.set_covered(covered);
     virtual_input::panel(app, ui, covered);
-    tool_strip(app, ui);
+    if is_set(ui.ctx(), tool_strip_hidden_id()) {
+        collapsed_tool_strip(ui);
+    } else {
+        tool_strip(app, ui);
+    }
     options(app, ui);
     // Held sideways the sheet goes to the right of the picture, under the top bar (see `side_sheet`);
     // upright it goes above the options, as wide as the screen.
@@ -268,6 +272,10 @@ fn sheet_open_id() -> egui::Id {
     egui::Id::unique("phone-sheet-open")
 }
 
+fn tool_strip_hidden_id() -> egui::Id {
+    egui::Id::unique("phone-tool-strip-hidden")
+}
+
 fn sheet_group_id() -> egui::Id {
     egui::Id::unique("phone-sheet-group")
 }
@@ -297,19 +305,12 @@ pub fn top_bar_rect(ctx: &egui::Context) -> Option<egui::Rect> {
     ctx.data(|d| d.get_temp::<egui::Rect>(top_bar_rect_id()))
 }
 
-/// The top bar: menus, the document's name, undo, redo, the virtual mouse and keyboard toggles, and the
-/// panels button.
+/// The top bar: menus, phone settings, undo, redo, the virtual mouse and keyboard toggles, and panels.
 fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let (menu_open, sheet_open) = (is_set(&ctx, menu_open_id()), is_set(&ctx, sheet_open_id()));
     let (mouse_on, keys_on, lens_on) = (app.virtual_mouse.is_on(), app.virtual_input.keyboard_on(), app.virtual_mouse.magnifier_on());
-    let title = app
-        .session
-        .active()
-        .map(|d| format!("{}{}", d.doc.name, if d.is_dirty() { "  •" } else { "" }))
-        .unwrap_or_else(|| "PhotoDroid".into());
-    let status = app.ui.status.clone();
     let can_undo = menus::is_enabled(app, "edit.undo");
     let can_redo = menus::is_enabled(app, "edit.redo");
     let (mut toggle_menu, mut toggle_sheet) = (false, false);
@@ -323,33 +324,33 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ctx.data_mut(|d| d.insert_temp(top_bar_rect_id(), ui.max_rect()));
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                toggle_menu = icons::button(ui, "align-justify", TOUCH, menu_open, tl!("Menu")).clicked();
-                // The name, and the status line under it, take the room the buttons leave.
-                // Undo, redo, the mouse, the magnifier, the keyboard and the panels.
-                let buttons = 6.0;
-                let name_w = (ui.available_width() - buttons * (TOUCH + 2.0)).max(0.0);
-                ui.vertical(|ui| {
-                    ui.set_width(name_w);
-                    ui.add(egui::Label::new(RichText::new(title.as_str()).font(theme::medium(14.0)).color(t.text)).truncate());
-                    if !status.is_empty() {
-                        ui.add(egui::Label::new(RichText::new(status.as_str()).size(11.0).color(t.text_faint)).truncate());
+                // Eight controls fit even on a narrow phone, without removing any existing action.
+                let button_size = ((ui.available_width() - 14.0) / 8.0).min(TOUCH).max(0.0);
+                toggle_menu = icons::button(ui, "align-justify", button_size, menu_open, tl!("Menu")).clicked();
+                let settings = icons::button(ui, "settings", button_size, false, tl!("Phone settings"));
+                egui::Popup::menu(&settings).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                    ui.set_min_width(190.0);
+                    let mut system_keyboard = !app.virtual_input.system_keyboard_disabled();
+                    if ui.checkbox(&mut system_keyboard, tl!("System keyboard")).changed() {
+                        app.virtual_input.set_system_keyboard_disabled(!system_keyboard);
+                        ctx.request_repaint();
                     }
                 });
                 let _ = ui.add_enabled_ui(can_undo, |ui| {
-                    if icons::button(ui, "undo-2", TOUCH, false, tl!("Undo")).clicked() {
+                    if icons::button(ui, "undo-2", button_size, false, tl!("Undo")).clicked() {
                         run = Some("edit.undo");
                     }
                 });
                 let _ = ui.add_enabled_ui(can_redo, |ui| {
-                    if icons::button(ui, "redo-2", TOUCH, false, tl!("Redo")).clicked() {
+                    if icons::button(ui, "redo-2", button_size, false, tl!("Redo")).clicked() {
                         run = Some("edit.redo");
                     }
                 });
-                toggle_mouse = toggle_button(ui, "mouse-pointer-2", mouse_on, tl!("Virtual mouse"));
+                toggle_mouse = toggle_button_sized(ui, "mouse-pointer-2", button_size, mouse_on, tl!("Virtual mouse"));
                 // The magnifier works with a finger too: a loupe in a corner shows what is under it.
-                toggle_lens = toggle_button(ui, "search", lens_on, tl!("Magnifier"));
-                toggle_keys = toggle_button(ui, "keyboard", keys_on, tl!("Virtual keyboard"));
-                toggle_sheet = icons::button(ui, "layers", TOUCH, sheet_open, tl!("Panels")).clicked();
+                toggle_lens = toggle_button_sized(ui, "search", button_size, lens_on, tl!("Magnifier"));
+                toggle_keys = toggle_button_sized(ui, "keyboard", button_size, keys_on, tl!("Virtual keyboard"));
+                toggle_sheet = icons::button(ui, "layers", button_size, sheet_open, tl!("Panels")).clicked();
             });
         });
     if toggle_menu {
@@ -359,6 +360,9 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if toggle_sheet {
         set_flag(&ctx, sheet_open_id(), !sheet_open);
+        // Opening a dock sheet gives its body the tool strip's space. Closing it restores tools.
+        set_flag(&ctx, tool_strip_hidden_id(), !sheet_open);
+        ctx.request_repaint();
     }
     if toggle_mouse {
         let canvas = app.last_canvas_rect;
@@ -426,7 +430,11 @@ fn mouse_bar(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// A top-bar button that is a switch: it shows whether it is on, to a screen reader too. Returns whether it
 /// was pressed.
 fn toggle_button(ui: &mut egui::Ui, icon: &str, on: bool, tooltip: &str) -> bool {
-    let resp = icons::button(ui, icon, TOUCH, on, tooltip);
+    toggle_button_sized(ui, icon, TOUCH, on, tooltip)
+}
+
+fn toggle_button_sized(ui: &mut egui::Ui, icon: &str, size: f32, on: bool, tooltip: &str) -> bool {
+    let resp = icons::button(ui, icon, size, on, tooltip);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tooltip));
     resp.clicked()
 }
@@ -687,6 +695,23 @@ fn end_strip_scroll(
     }
 }
 
+/// The collapsed strip leaves a small up-arrow only; there is deliberately no close arrow when
+/// expanded. A downward swipe on the actual strip hides it instead.
+fn collapsed_tool_strip(ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    egui::Panel::bottom("phone-tools-collapsed")
+        .exact_size(24.0)
+        .frame(Frame::NONE.fill(t.chrome))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                if icons::button(ui, "chevron-up", 24.0, false, tl!("Show tools")).clicked() {
+                    set_flag(ui.ctx(), tool_strip_hidden_id(), false);
+                    ui.ctx().request_repaint();
+                }
+            });
+        });
+}
+
 /// The strip of every tool, sideways-scrolling, Photoshop's order with a divider between sections.
 /// A button that holds several tools shows the one last used, and lists the others on a long press.
 fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -712,6 +737,27 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .frame(Frame::NONE.fill(t.chrome).inner_margin(Margin::symmetric(4, 6)))
         .show(ui, |ui| {
             let r = ui.max_rect();
+            let swipe_down = ui.input(|i| {
+                let origin = i.pointer.press_origin();
+                let current = i.pointer.interact_pos().or_else(|| i.pointer.latest_pos());
+                match (origin, current) {
+                    (Some(a), Some(b)) if r.expand(6.0).contains(a) && (i.pointer.primary_down() || i.pointer.any_released()) => {
+                        let d = b - a;
+                        d.y > 26.0 && d.y > d.x.abs() * 1.3
+                    }
+                    _ => false,
+                }
+            });
+            if swipe_down {
+                set_flag(ui.ctx(), tool_strip_hidden_id(), true);
+                ui.data_mut(|d| {
+                    d.remove::<(egui::Id, egui::Rect)>(flyout_id);
+                    d.remove::<egui::Id>(held_id);
+                    d.remove::<(egui::Id, egui::Pos2)>(pressed_slot_id);
+                });
+                ui.ctx().request_repaint();
+                return;
+            }
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
             let hold_flyout_active = ui.data(|d| d.get_temp::<egui::Id>(held_id)).is_some()
                 && ui.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(flyout_id)).is_some();
@@ -1004,9 +1050,13 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             .default_size((screen.x * 0.42).max(300.0))
             .size_range(290.0..=(screen.x * 0.6).max(300.0))
     } else {
-        egui::Panel::bottom("phone-sheet")
+        // Keep separate remembered sizes for the two layouts. The compact-tools layout starts
+        // taller by exactly the freed strip height, and each layout remains manually resizable.
+        let compact = is_set(&ctx, tool_strip_hidden_id());
+        let id = if compact { "phone-sheet-compact-tools" } else { "phone-sheet" };
+        egui::Panel::bottom(id)
             .resizable(true)
-            .default_size((screen.y * 0.4).max(220.0))
+            .default_size((screen.y * 0.4).max(220.0) + if compact { TOOL_STRIP - 24.0 } else { 0.0 })
             .size_range(220.0..=(screen.y * 0.85).max(260.0))
     };
     panel
@@ -1030,6 +1080,8 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     if close {
         set_flag(&ctx, sheet_open_id(), false);
+        set_flag(&ctx, tool_strip_hidden_id(), false);
+        ctx.request_repaint();
     }
     if let Some(g) = pick {
         ctx.data_mut(|d| d.insert_temp(sheet_group_id(), g));
@@ -1101,13 +1153,6 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             });
         });
-        // Keep this outside the scrolling menu, so the user can always turn the system IME back
-        // on, including while a text field or a type layer is being edited.
-        let mut system_keyboard = !app.virtual_input.system_keyboard_disabled();
-        if ui.checkbox(&mut system_keyboard, tl!("System keyboard")).changed() {
-            app.virtual_input.set_system_keyboard_disabled(!system_keyboard);
-            ctx.request_repaint();
-        }
         let field = ui.available_width();
         ui.add_sized(vec2(field, TOUCH), egui::TextEdit::singleline(&mut query).hint_text(tl!("Search commands")));
         ui.separator();
@@ -1507,20 +1552,21 @@ mod tests {
     }
 
     #[test]
-    fn the_menu_can_toggle_the_system_keyboard_without_toggling_the_in_app_keyboard() {
+    fn the_settings_can_toggle_the_system_keyboard_without_toggling_the_in_app_keyboard() {
         use egui_kittest::{Harness, kittest::Queryable};
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let mut h = Harness::builder().with_size(vec2(411.0, 800.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if fonts_bound(ui.ctx()) {
-                    menu(app, ui.ctx());
+                    top_bar(app, ui);
                 }
             },
             app,
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
-        set_flag(&h.ctx, menu_open_id(), true);
         h.run_steps(4);
+        h.get_by_label("Phone settings").click();
+        h.run_steps(2);
         h.get_by_label("System keyboard").click();
         h.run_steps(2);
         assert!(h.state().virtual_input.system_keyboard_disabled());
@@ -1528,6 +1574,59 @@ mod tests {
         h.get_by_label("System keyboard").click();
         h.run_steps(2);
         assert!(!h.state().virtual_input.system_keyboard_disabled());
+    }
+
+    #[test]
+    fn opening_panels_collapses_tools_and_the_arrow_restores_them() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(411.0, 800.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) {
+                    if is_set(ui.ctx(), tool_strip_hidden_id()) { collapsed_tool_strip(ui); } else { tool_strip(app, ui); }
+                    top_bar(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        assert!(!is_set(&h.ctx, tool_strip_hidden_id()));
+        h.get_by_label("Panels").click();
+        h.run_steps(2);
+        assert!(is_set(&h.ctx, tool_strip_hidden_id()));
+        h.get_by_label("Show tools").click();
+        h.run_steps(2);
+        assert!(!is_set(&h.ctx, tool_strip_hidden_id()));
+        h.get_by_label("Panels").click();
+        h.run_steps(2);
+        assert!(!is_set(&h.ctx, sheet_open_id()));
+        assert!(!is_set(&h.ctx, tool_strip_hidden_id()));
+    }
+
+    #[test]
+    fn dragging_down_on_tools_collapses_without_changing_the_selected_tool() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let initial_tool = app.ui.tool;
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        let step = |app: &mut PhotocraftApp, time: f64, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                time: Some(time), events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(411.0, 891.0))),
+                ..Default::default()
+            };
+            frame(&ctx, true, input, |ui| tool_strip(app, ui));
+        };
+        let start = egui::pos2(20.0, 843.0);
+        let end = start + vec2(1.0, 32.0);
+        let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        step(&mut app, 0.0, vec![]);
+        step(&mut app, 0.1, vec![]);
+        step(&mut app, 1.0, vec![egui::Event::PointerMoved(start), pointer(start, true)]);
+        step(&mut app, 1.1, vec![egui::Event::PointerMoved(end)]);
+        assert!(is_set(&ctx, tool_strip_hidden_id()));
+        assert_eq!(app.ui.tool, initial_tool);
     }
 
     #[test]
