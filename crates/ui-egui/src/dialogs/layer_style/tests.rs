@@ -231,7 +231,7 @@ fn phone_dialog_layer_style_page_scrolls_with_its_dialog() {
                 body_with_response(app, ui, &mut f, true);
             });
             ui.data_mut(|d| {
-                d.insert_temp(offset_id, out.state.offset().y);
+                d.insert_temp(offset_id, out.state.clamped_offset().y);
                 d.insert_temp(viewport_id, out.inner_rect);
             });
         }, app,
@@ -241,13 +241,20 @@ fn phone_dialog_layer_style_page_scrolls_with_its_dialog() {
     let viewport = h.ctx.data(|d| d.get_temp::<egui::Rect>(viewport_id)).expect("scroll viewport");
     let from = egui::pos2(viewport.left() + 8.0, viewport.bottom() - 20.0);
     let to = from - vec2(0.0, 100.0);
+    // The harness pointer is a mouse by default, whereas egui enables drag scrolling only after
+    // a touchscreen is detected. Send touch events alongside its synthesized pointer events.
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
     h.hover_at(from);
+    h.event(touch(egui::TouchPhase::Start, from));
     h.drag_at(from);
     h.run_steps(2);
     for i in 1..=8 {
-        h.hover_at(from + (to - from) * (i as f32 / 8.0));
+        let at = from + (to - from) * (i as f32 / 8.0);
+        h.event(touch(egui::TouchPhase::Move, at));
+        h.hover_at(at);
         h.run_steps(1);
     }
+    h.event(touch(egui::TouchPhase::End, to));
     h.drop_at(to);
     h.run_steps(3);
     let offset = h.ctx.data(|d| d.get_temp::<f32>(offset_id)).unwrap_or_default();
