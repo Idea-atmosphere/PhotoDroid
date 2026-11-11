@@ -210,6 +210,50 @@ fn strokes_of(s: &photocraft_engine::Session) -> Vec<StrokeFx> {
         .collect()
 }
 
+/// The selected phone page is part of the surrounding dialog scroll, not a second fixed-height
+/// scroller. A drag beginning in the page moves the surrounding viewport, and the lower controls
+/// can consequently be reached in the same scroll.
+#[test]
+fn phone_dialog_layer_style_page_scrolls_with_its_dialog() {
+    use egui_kittest::Harness;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    let layer = Layer::raster("x", photocraft_doc::PixelFormat::RGBA8);
+    let fields = initial_fields(&layer, Some("bevelEmboss"), 120.0);
+    let offset_id = egui::Id::unique("test-phone-layer-style-offset");
+    let viewport_id = egui::Id::unique("test-phone-layer-style-viewport");
+    let mut h = Harness::builder().with_size(vec2(406.0, 520.0)).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) { return; }
+            crate::mobile::set_gestures(ui.ctx(), true);
+            let mut f = fields.clone();
+            let out = egui::ScrollArea::vertical().id_salt("test-phone-layer-style-scroll").max_height(420.0).show(ui, |ui| {
+                body_with_response(app, ui, &mut f, true);
+            });
+            ui.data_mut(|d| {
+                d.insert_temp(offset_id, out.state.offset.y);
+                d.insert_temp(viewport_id, out.inner_rect);
+            });
+        }, app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run_steps(4);
+    let viewport = h.ctx.data(|d| d.get_temp::<egui::Rect>(viewport_id)).expect("scroll viewport");
+    let from = egui::pos2(viewport.left() + 8.0, viewport.bottom() - 20.0);
+    let to = from - vec2(0.0, 100.0);
+    h.hover_at(from);
+    h.drag_at(from);
+    h.run_steps(2);
+    for i in 1..=8 {
+        h.hover_at(from + (to - from) * (i as f32 / 8.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+    let offset = h.ctx.data(|d| d.get_temp::<f32>(offset_id)).unwrap_or_default();
+    assert!(offset > 20.0, "dragging the page should scroll the dialog, got {offset}");
+}
+
 /// #1357: every effect row has its checkbox from the start, also for the effects not on the
 /// layer yet (an empty box), not only after one was turned on and off again.
 #[test]

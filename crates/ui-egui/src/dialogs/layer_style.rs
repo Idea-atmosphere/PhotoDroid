@@ -960,14 +960,24 @@ pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Ma
             ui.add_space(6.0);
         }
         let page_w = if stacked { room } else { ui.available_width() - SIDE_W - ui.spacing().item_spacing.x };
-        let page_height = if stacked { 360.0 } else { height };
-        boxed(ui, page_w, page_height, |ui, h| {
-            egui::ScrollArea::vertical()
-                .id_salt("layer-style-page")
-                .max_height(h)
-                .auto_shrink(false)
-                .show(ui, |ui| page(app, ui, f, &selected, invalid.as_deref(), &mut style_click));
-        });
+        if stacked {
+            // The phone dialog already scrolls. Let the selected page grow with its content so
+            // a swipe here scrolls that same dialog instead of a hidden second scroll region.
+            let t = Tokens::get(ui.ctx());
+            egui::Frame::new().stroke(Stroke::new(1.0, t.separator)).corner_radius(t.radius_sm).inner_margin(4.0).show(ui, |ui| {
+                ui.set_width((page_w - 10.0).max(40.0));
+                page(app, ui, f, &selected, invalid.as_deref(), &mut style_click);
+            });
+        } else {
+            // Desktop keeps its fixed three-column dialog and independently scrolling page.
+            boxed(ui, page_w, height, |ui, h| {
+                egui::ScrollArea::vertical()
+                    .id_salt("layer-style-page")
+                    .max_height(h)
+                    .auto_shrink(false)
+                    .show(ui, |ui| page(app, ui, f, &selected, invalid.as_deref(), &mut style_click));
+            });
+        }
         if !stacked {
             ui.vertical(|ui| {
                 ui.set_width(SIDE_W);
