@@ -703,8 +703,6 @@ fn collapsed_tool_strip(app: &PhotocraftApp, ui: &mut egui::Ui) {
     let bottom = screen.bottom() - virtual_input::lift(app);
     let position = egui::pos2(screen.center().x - 24.0, bottom - 44.0);
     egui::Area::new(egui::Id::unique("phone-tools-restore"))
-        // A floating area otherwise has no parent in the accessibility tree, so its button
-        // cannot be found by keyboard/accessibility clients or the phone UI harness.
         .accessibility_parent(ui.unique_id())
         .order(egui::Order::Foreground)
         .movable(false)
@@ -1613,12 +1611,17 @@ mod tests {
         h.run_steps(4);
         assert!(!is_set(&h.ctx, tool_strip_hidden_id()));
         h.get_by_label("Panels").click();
-        h.run_steps(2);
+        h.run_steps(4);
         assert!(is_set(&h.ctx, tool_strip_hidden_id()));
-        let restore = h.get_by_label("Show tools").rect();
+        // This is a floating Area: exercise the actual on-screen hit target rather than assuming
+        // the accessibility tree has attached the root area. Area memory holds its drawn rect.
+        let restore = h.ctx.memory(|m| m.area_rect(egui::Id::unique("phone-tools-restore"))).expect("restore area is present");
         assert!((restore.center().x - 411.0 / 2.0).abs() < 1.0, "the arrow is centered: {restore:?}");
         assert!(restore.bottom() <= 800.0 && restore.top() >= 0.0, "the arrow is visible: {restore:?}");
-        h.get_by_label("Show tools").click();
+        assert!(restore.width() >= 44.0 && restore.height() >= 44.0, "the target is touch-sized: {restore:?}");
+        h.hover_at(restore.center());
+        h.drag_at(restore.center());
+        h.drop_at(restore.center());
         h.run_steps(2);
         assert!(!is_set(&h.ctx, tool_strip_hidden_id()));
         h.get_by_label("Panels").click();
