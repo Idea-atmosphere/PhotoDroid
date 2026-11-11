@@ -231,7 +231,7 @@ fn phone_dialog_layer_style_page_scrolls_with_its_dialog() {
                 body_with_response(app, ui, &mut f, true);
             });
             ui.data_mut(|d| {
-                d.insert_temp(offset_id, out.state.offset.y);
+                d.insert_temp(offset_id, out.state.offset().y);
                 d.insert_temp(viewport_id, out.inner_rect);
             });
         }, app,
