@@ -1101,6 +1101,13 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             });
         });
+        // Keep this outside the scrolling menu, so the user can always turn the system IME back
+        // on, including while a text field or a type layer is being edited.
+        let mut system_keyboard = !app.virtual_input.system_keyboard_disabled();
+        if ui.checkbox(&mut system_keyboard, tl!("System keyboard")).changed() {
+            app.virtual_input.set_system_keyboard_disabled(!system_keyboard);
+            ctx.request_repaint();
+        }
         let field = ui.available_width();
         ui.add_sized(vec2(field, TOUCH), egui::TextEdit::singleline(&mut query).hint_text(tl!("Search commands")));
         ui.separator();
@@ -1497,6 +1504,30 @@ mod tests {
     /// takes effect, so a test draws nothing until they are (as the app draws nothing until its fonts are ready).
     fn fonts_bound(ctx: &egui::Context) -> bool {
         ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into())))
+    }
+
+    #[test]
+    fn the_menu_can_toggle_the_system_keyboard_without_toggling_the_in_app_keyboard() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(411.0, 800.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) {
+                    menu(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        set_flag(&h.ctx, menu_open_id(), true);
+        h.run_steps(4);
+        h.get_by_label("System keyboard").click();
+        h.run_steps(2);
+        assert!(h.state().virtual_input.system_keyboard_disabled());
+        assert!(!h.state().virtual_input.keyboard_on());
+        h.get_by_label("System keyboard").click();
+        h.run_steps(2);
+        assert!(!h.state().virtual_input.system_keyboard_disabled());
     }
 
     #[test]

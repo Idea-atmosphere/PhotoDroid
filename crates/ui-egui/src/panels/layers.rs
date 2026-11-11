@@ -242,6 +242,20 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         inactive_blend_rows(ui, t.pro);
     }
 
+    // A touch-accessible alternative to holding a row: use the very same full layer menu and
+    // selection semantics as right-clicking the active layer. Desktop retains its existing UI.
+    if crate::mobile::gestures_on(ui.ctx()) && let Some(layer) = active_layer {
+        let button = icons::button(ui, "ellipsis", 36.0, false, tl!("Layer context menu"));
+        egui::Popup::menu(&button).show(|ui| {
+            crate::widgets::style_spectrum_popup_menu(ui);
+            if crate::layer_menu_ui::show(app, ui, layer, selection.len() > 1 && selection.contains(&layer.id), &mut actions)
+                && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), layer.id.0, &layer.name)
+            {
+                actions.push(done);
+            }
+        });
+    }
+
     // Top of the stack first, groups above their contents, closed groups' contents hidden (#126).
     let rows = crate::layer_tree_ui::panel_rows(app, &doc);
     let ctx = ui.ctx().clone();
@@ -620,4 +634,33 @@ pub(crate) fn fx_button(ui: &mut egui::Ui, size: f32, tip: &str) -> egui::Respon
 
 pub(super) fn channels(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::channels_panel::show(app, ui);
+}
+
+#[cfg(test)]
+mod layer_row_ui_context_button_tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn selected_layer_menu_opens_without_a_long_press() {
+        let _language = crate::i18n::language_scope(crate::i18n::Lang::EN);
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        session.execute("layer.new.layer", json!({})).unwrap();
+        let app = PhotocraftApp::new(session, Default::default());
+        let mut h = Harness::builder().with_size(vec2(400.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    crate::mobile::set_gestures(ui.ctx(), true);
+                    layers(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("Layer context menu").click();
+        h.run_steps(3);
+        h.get_by_label("Rename Layer…");
+    }
 }

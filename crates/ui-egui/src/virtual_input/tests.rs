@@ -235,3 +235,17 @@ fn the_keyboard_lifts_the_dialogs_and_the_menu_only_while_it_is_on() {
     app.virtual_input.set_keyboard(true);
     assert_eq!(lift(&app), PANEL_H);
 }
+
+#[test]
+fn system_keyboard_can_be_disabled_independently_and_reenabled_while_editing() {
+    let mut vi = VirtualInput::default();
+    vi.set_system_keyboard_disabled(true);
+    assert_eq!(vi.ime_request(false), Some(false), "hide even if focus was lost");
+    assert_eq!(vi.ime_request(true), None, "new focus stays suppressed");
+    vi.set_keyboard(true);
+    vi.set_system_keyboard_disabled(false);
+    assert_eq!(vi.ime_request(true), None, "the internal keyboard still suppresses the IME");
+    vi.set_keyboard(false);
+    assert_eq!(vi.ime_request(true), Some(true), "restore while editing");
+    assert_eq!(vi.ime_request(true), None);
+}

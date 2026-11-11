@@ -154,6 +154,8 @@ pub struct VirtualInput {
     queue: Vec<Event>,
     /// The system keyboard has been asked away for the current text focus (see [`VirtualInput::ime_request`]).
     ime_away_asked: bool,
+    /// The user can suppress the system keyboard independently of the in-app keyboard.
+    system_keyboard_disabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -176,6 +178,15 @@ impl VirtualInput {
             self.alt = HoldState::default();
             self.shift = HoldState::default();
         }
+    }
+
+    /// Whether the user has disabled automatic display of the Android system keyboard.
+    pub fn system_keyboard_disabled(&self) -> bool {
+        self.system_keyboard_disabled
+    }
+
+    pub fn set_system_keyboard_disabled(&mut self, disabled: bool) {
+        self.system_keyboard_disabled = disabled;
     }
 
     pub fn toggle_keyboard(&mut self) {
@@ -204,12 +215,11 @@ impl VirtualInput {
         &self.queue
     }
 
-    /// What to ask of the system keyboard this frame, given whether a text field has the focus. While the
-    /// on-screen keyboard is on, the system one is asked away (`Some(false)`) once for each focus, so that the
-    /// field types with the on-screen one. If the on-screen keyboard goes while a field still has the focus,
-    /// the system one is asked back (`Some(true)`).
+    /// What to ask of the system keyboard this frame. The user can suppress it even without an
+    /// active focus; the in-app keyboard suppresses it while typing. When suppression ends during
+    /// editing, ask the system keyboard back. Never log the text being edited.
     pub fn ime_request(&mut self, typing: bool) -> Option<bool> {
-        if self.keyboard && typing {
+        if self.system_keyboard_disabled || (self.keyboard && typing) {
             return (!std::mem::replace(&mut self.ime_away_asked, true)).then_some(false);
         }
         let was_away = std::mem::replace(&mut self.ime_away_asked, false);
@@ -324,7 +334,7 @@ pub fn lift(app: &PhotocraftApp) -> f32 {
 /// Each frame: the system keyboard is asked away from (or back to) a text field, and the keyboard's Persian
 /// letters get their font once it is on.
 pub fn logic(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if let Some(show) = app.virtual_input.ime_request(ctx.egui_wants_keyboard_input())
+    if let Some(show) = app.virtual_input.ime_request(ctx.egui_wants_keyboard_input() || app.ui.text_edit.is_some())
         && let Some(ask) = app.services.soft_keyboard.as_mut()
     {
         ask(show);

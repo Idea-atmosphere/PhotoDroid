@@ -410,6 +410,11 @@ impl eframe::App for AndroidShell {
         ui.painter().rect_filled(ui.max_rect(), 0.0, panel);
         let safe = ui.ctx().content_rect();
         let _ = ui.scope_builder(egui::UiBuilder::new().max_rect(safe), |inner| self.app.ui(inner, frame));
+        // Suppress eframe/winit's own IME request as well as the explicit Java request. Keep the
+        // text widget focused: the in-app and hardware keyboards can still send it input.
+        if self.app.virtual_input.system_keyboard_disabled() {
+            ui.ctx().output_mut(|output| output.ime = None);
+        }
         self.frame_work += began.elapsed();
         // The frame's work goes to the diagnostic log: a long frame on its own, a window of slow ones as a summary.
         if let Some(start) = self.frame_started.take() {
