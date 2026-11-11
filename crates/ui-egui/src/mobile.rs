@@ -146,11 +146,12 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     app.virtual_mouse.set_covered(covered);
     virtual_input::panel(app, ui, covered);
     if is_set(ui.ctx(), tool_strip_hidden_id()) {
-        collapsed_tool_strip(ui);
+        // The restore tab floats over the bottom edge: it reserves no full-width strip.
+        if !covered { collapsed_tool_strip(app, ui); }
     } else {
         tool_strip(app, ui);
+        options(app, ui);
     }
-    options(app, ui);
     // Held sideways the sheet goes to the right of the picture, under the top bar (see `side_sheet`);
     // upright it goes above the options, as wide as the screen.
     let side = side_sheet(ui.ctx().content_rect().size());
@@ -695,21 +696,39 @@ fn end_strip_scroll(
     }
 }
 
-/// The collapsed strip leaves a small up-arrow only; there is deliberately no close arrow when
-/// expanded. A downward swipe on the actual strip hides it instead.
-fn collapsed_tool_strip(ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    egui::Panel::bottom("phone-tools-collapsed")
-        .exact_size(24.0)
-        .frame(Frame::NONE.fill(t.chrome))
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                if icons::button(ui, "chevron-up", 24.0, false, tl!("Show tools")).clicked() {
-                    set_flag(ui.ctx(), tool_strip_hidden_id(), false);
-                    ui.ctx().request_repaint();
-                }
-            });
+/// A small, centered restore tab, over the bottom edge rather than in an empty full-width bar.
+fn collapsed_tool_strip(app: &PhotocraftApp, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    let screen = ctx.content_rect();
+    let bottom = screen.bottom() - virtual_input::lift(app);
+    let position = egui::pos2(screen.center().x - 24.0, bottom - 44.0);
+    egui::Area::new(egui::Id::unique("phone-tools-restore"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(position)
+        .show(&ctx, |ui| {
+            let t = Tokens::get(ui.ctx());
+            let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 44.0), Sense::click());
+            ui.painter().rect_filled(rect, 4.0, t.chrome);
+            icons::paint(ui, rect, "chevron-up", 19.0, t.icon);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Show tools")));
+            if resp.clicked() {
+                set_flag(ui.ctx(), tool_strip_hidden_id(), false);
+                ui.ctx().request_repaint();
+            }
         });
+}
+
+/// A vertical swipe belongs to collapse, not the strip's horizontal scroller or tool buttons.
+fn downward_strip_swipe(ui: &egui::Ui, rect: egui::Rect) -> bool {
+    ui.input(|i| {
+        match (i.pointer.press_origin(), i.pointer.interact_pos().or_else(|| i.pointer.latest_pos())) {
+            (Some(a), Some(b)) if rect.expand(6.0).contains(a) && (i.pointer.primary_down() || i.pointer.any_released()) => {
+                let d = b - a;
+                d.y > 26.0 && d.y > d.x.abs() * 1.3
+            }
+            _ => false,
+        }
+    })
 }
 
 /// The strip of every tool, sideways-scrolling, Photoshop's order with a divider between sections.
@@ -737,17 +756,7 @@ fn tool_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .frame(Frame::NONE.fill(t.chrome).inner_margin(Margin::symmetric(4, 6)))
         .show(ui, |ui| {
             let r = ui.max_rect();
-            let swipe_down = ui.input(|i| {
-                let origin = i.pointer.press_origin();
-                let current = i.pointer.interact_pos().or_else(|| i.pointer.latest_pos());
-                match (origin, current) {
-                    (Some(a), Some(b)) if r.expand(6.0).contains(a) && (i.pointer.primary_down() || i.pointer.any_released()) => {
-                        let d = b - a;
-                        d.y > 26.0 && d.y > d.x.abs() * 1.3
-                    }
-                    _ => false,
-                }
-            });
+            let swipe_down = downward_strip_swipe(ui, r);
             if swipe_down {
                 set_flag(ui.ctx(), tool_strip_hidden_id(), true);
                 ui.data_mut(|d| {
@@ -999,6 +1008,11 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             // The desktop bar's separators: the strip is drawn between two rules.
             let r = ui.max_rect();
+            if downward_strip_swipe(ui, r) {
+                set_flag(ui.ctx(), tool_strip_hidden_id(), true);
+                ui.ctx().request_repaint();
+                return;
+            }
             ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
             ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
             let strip_scroll_id = egui::Id::unique("phone-options-strip-scroll");
@@ -1056,7 +1070,7 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let id = if compact { "phone-sheet-compact-tools" } else { "phone-sheet" };
         egui::Panel::bottom(id)
             .resizable(true)
-            .default_size((screen.y * 0.4).max(220.0) + if compact { TOOL_STRIP - 24.0 } else { 0.0 })
+            .default_size((screen.y * 0.4).max(220.0) + if compact { TOOL_STRIP + OPTIONS_ROW } else { 0.0 })
             .size_range(220.0..=(screen.y * 0.85).max(260.0))
     };
     panel
@@ -1384,9 +1398,9 @@ fn command_row(ui: &mut egui::Ui, item: &menus::MenuItem, lang: i18n::Lang, pick
     }
 }
 
-/// The width a dialog may take on the phone: the screen less a margin on each side, and at least 200 points.
+/// The width a dialog may take on the phone: the screen less a margin on each side.
 pub fn dialog_room(screen: Vec2) -> f32 {
-    (screen.x - 24.0).max(200.0)
+    (screen.x - 24.0).max(1.0)
 }
 
 /// A dialog's width: `desired`, or the room the phone's screen leaves it when that is less. Off the phone
@@ -1583,7 +1597,7 @@ mod tests {
         let mut h = Harness::builder().with_size(vec2(411.0, 800.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if fonts_bound(ui.ctx()) {
-                    if is_set(ui.ctx(), tool_strip_hidden_id()) { collapsed_tool_strip(ui); } else { tool_strip(app, ui); }
+                    if is_set(ui.ctx(), tool_strip_hidden_id()) { collapsed_tool_strip(app, ui); } else { tool_strip(app, ui); }
                     top_bar(app, ui);
                 }
             },
@@ -1595,6 +1609,9 @@ mod tests {
         h.get_by_label("Panels").click();
         h.run_steps(2);
         assert!(is_set(&h.ctx, tool_strip_hidden_id()));
+        let restore = h.get_by_label("Show tools").rect();
+        assert!((restore.center().x - 411.0 / 2.0).abs() < 1.0, "the arrow is centered: {restore:?}");
+        assert!(restore.bottom() <= 800.0 && restore.top() >= 0.0, "the arrow is visible: {restore:?}");
         h.get_by_label("Show tools").click();
         h.run_steps(2);
         assert!(!is_set(&h.ctx, tool_strip_hidden_id()));
@@ -1619,6 +1636,31 @@ mod tests {
             frame(&ctx, true, input, |ui| tool_strip(app, ui));
         };
         let start = egui::pos2(20.0, 843.0);
+        let end = start + vec2(1.0, 32.0);
+        let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        step(&mut app, 0.0, vec![]);
+        step(&mut app, 0.1, vec![]);
+        step(&mut app, 1.0, vec![egui::Event::PointerMoved(start), pointer(start, true)]);
+        step(&mut app, 1.1, vec![egui::Event::PointerMoved(end)]);
+        assert!(is_set(&ctx, tool_strip_hidden_id()));
+        assert_eq!(app.ui.tool, initial_tool);
+    }
+
+    #[test]
+    fn dragging_down_on_options_collapses_without_changing_the_selected_tool() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let initial_tool = app.ui.tool;
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        let step = |app: &mut PhotocraftApp, time: f64, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                time: Some(time), events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(411.0, 891.0))),
+                ..Default::default()
+            };
+            frame(&ctx, true, input, |ui| { tool_strip(app, ui); options(app, ui); });
+        };
+        let start = egui::pos2(20.0, 891.0 - TOOL_STRIP - OPTIONS_ROW / 2.0);
         let end = start + vec2(1.0, 32.0);
         let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
         step(&mut app, 0.0, vec![]);
@@ -1850,7 +1892,7 @@ mod tests {
         assert_eq!(fit_width(780.0, Some(room)), 387.0);
         assert_eq!(fit_width(380.0, Some(room)), 380.0);
         assert_eq!(fit_width(800.0, None), 800.0);
-        assert_eq!(dialog_room(vec2(120.0, 300.0)), 200.0);
+        assert_eq!(dialog_room(vec2(120.0, 300.0)), 96.0);
     }
 
     /// On the phone a floating window keeps within the screen; elsewhere it keeps its width.

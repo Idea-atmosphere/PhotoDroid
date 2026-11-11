@@ -3,15 +3,14 @@
 **English** | [فارسی](README.fa.md)
 
 **PhotoDroid** ([`Idea-atmosphere/PhotoDroid`](https://github.com/Idea-atmosphere/PhotoDroid)) is an open-source Android port of the desktop [PhotoCraft](https://github.com/storytold/photocraft) image and photo editor — a clean-room Adobe Photoshop (PSD/PSB) editor written in pure Rust
-(synced through upstream commit `d2330fccea04d886c93fe7ee35757b72b5db6aff`; previous baseline `cece50d5`; see [Upstream sync](#upstream-sync)). The Rust engine, the file codecs, and the egui interface are the same
-code as the desktop app. What changes is the shell: instead of a winit window with native dialogs,
+(synced through upstream commit `d2330fccea04d886c93fe7ee35757b72b5db6aff`; previous baseline `cece50d5`; see [Upstream sync](#upstream-sync)). The Rust engine, file codecs and egui interface derive from the desktop app, with Android
+adaptations. The shell also differs: instead of a winit window with native dialogs,
 the app runs inside an Android `NativeActivity`, with the system file picker, MediaStore for saves,
 app-private storage for preferences, crash recovery and brush presets, and public
 `Download/PhotoCraft/Projects`, `Output`, `Fonts` and `log` folders.
 
-> **Status:** CI builds the arm64 library and an installable debug APK, and the host tests pass.
-> The app has **not** been run on a device or an emulator yet, so its behaviour on Android is
-> untested.
+> **Status:** CI builds an arm64 APK and runs host and interface tests. Selected features have been
+> tested on an Android device; device coverage is not complete.
 
 ## What is in this repository
 
@@ -31,7 +30,7 @@ For the next sync, fetch PhotoCraft and review commits **after** `d2330fccea04d8
 
 In the previous sync, the shared crates were based on upstream `cece50d5`. All upstream commits up to `cece50d5` (including the `egui 0.37` upgrade, lazy CJK and non-Latin script font loading, Color Settings and ICC profile dialogs, stroke line/angle constraints, extracted feathering in `crates/vector/src/feather.rs`, unified `ImportOptions`, and IPP printing in `crates/ipp`) and the earlier commits after `95006995` and `ec03c602` were merged the same way: the Save Contents fix, upstream's Type formatting on selected layers (the phone's "all text layers" option still applies to every type layer), SVG group rasterizing depth and the Thai fallback fonts among them. Earlier: the upstream changes to `crates/`, the workspace `Cargo.toml`, the About credits (`contributors/people.toml`), `assets/icons/` and `ATTRIBUTION.md` in the 177 commits after `0050f29` (the previous sync's target) were merged onto the Android changes below. `crates/automation` (the desktop's TCP control) and `crates/tablet` (desktop-only) are not part of this port. Where both changed the same code, both are kept: `lib.rs` (the phone's chrome replaces the desktop bars on the phone, and upstream's per-tool brush switch runs first), `panels.rs` (the options bar's contents stay in `options_strip`; upstream's colour chips, eyedropper options and Rotate View options are kept), `canvas.rs` (the phone's two-finger pan, now through the Hand tool's mapping, and upstream's trackpad rotation), `gpu_canvas.rs` and `icon_data.rs` (the test and icon lists of both), the translations (`i18n/*.tsv`, the rows of both) and `ATTRIBUTION.md`, `prefs_ui.rs` (the phone's tabbed Preferences, with upstream's system theme) and `dialogs.rs` (the phone's dialog width, with upstream's Preferences width). Crash recovery on Android (`services.rs`) follows upstream's lazy `Recoverable` list: an entry is read when it is opened. Not synced: the desktop app (`apps/photocraft`), upstream's CI workflows, `xtask`, `docs/`, `book/`, `scorecard/` and `packaging/`, and the corpus data that `xtask` fetches (the corpus tests sit behind a `corpus` feature and do not run here). `Cargo.lock` is not synced: CI resolves it. The new upstream crate `photocraft-affinity` (the Affinity importer) is in the workspace; it adds `ruzstd` and `crc32fast`.
 
-The shared crates are changed only where Android needs it, in a few small places:
+The shared crates also carry Android adaptations. The following notes describe major fork-specific changes; some file paths moved during the upstream sync:
 
 - `crates/text/src/fonts.rs` scans `/system/fonts` on Android and can register the private staging
   copy of the user's public font directory, including nested TTF/OTF/TTC/OTC files;
@@ -52,15 +51,10 @@ The shared crates are changed only where Android needs it, in a few small places
 - `crates/ui-egui/src/lib.rs` and `jobs_ui.rs` gained `open_bytes_owned` and `bytes_owned`, which the
   inbox drain uses: a picked file's bytes go to the background open without a second copy. Opening
   from the desktop is unchanged.
-- `crates/engine/src/type_extra_cmds.rs` (the Anti-Alias, Orientation and OpenType commands) takes an
-  `allTextLayers` flag, which changes every type layer in one step. The phone's menu sends it
-  (`mobile.rs`, `menu_params`); the desktop menus don't, so they change the active layer as before.
-- `crates/ui-egui/src/lib.rs` gained the `Services::soft_keyboard` hook, which `type_tool.rs` calls
-  to show the soft keyboard on each tap into text (and to hide it when the edit ends). winit asks
-  for the keyboard implicitly, and Android may ignore an implicit request once the user has
-  dismissed the keyboard, which would explain the keyboard coming up only the first time (not yet
-  seen on a device). The hook is set
-  only on Android; on the desktop and the web it is unset and nothing changes.
+- The engine Type commands support an `allTextLayers` flag for some formatting operations. The phone menu
+  supplies it for the relevant commands; OpenType toggles operate on the selected layer.
+- `Services::soft_keyboard` bridges explicit Android keyboard requests. The phone settings gear can
+  disable the system keyboard independently of the in-app keyboard; typed content is not logged.
 - `crates/ui-egui/src/dialogs.rs` and `prefs_ui.rs` fit the dialogs to the phone: a dialog takes the
   width the screen leaves it, a body taller than the screen scrolls above its buttons, and
   Preferences shows its sections as tabs above the fields (`prefs_phone_body`). All of it applies
@@ -68,8 +62,7 @@ The shared crates are changed only where Android needs it, in a few small places
 - `crates/ui-egui/src/virtual_input.rs` (new) is the on-screen keyboard, a toggle in the phone's top
   bar (`mobile.rs`). The keyboard is a panel in place of the system keyboard, with English and Persian
   layouts and the modifier keys; its events go into the next frame's input in `raw_input_hook`, before
-  the clipboard keys, so they take the hardware keys' route. While the keyboard is on, `type_tool.rs`
-  does not ask for the system keyboard, and the dialogs and the menu keep clear of the keys
+  the clipboard keys, so they take the hardware keys' route. While the keyboard is on, the app suppresses the system keyboard, and the dialogs and the menu keep clear of the keys
   (`dialogs.rs`, `mobile.rs`). `cjk_fonts.rs` exposes `add_to_all_families`, which the keyboard uses
   to load the system's Arabic font for its Persian keys (Android only).
 - `crates/ui-egui/src/virtual_mouse.rs` (new) is the virtual mouse, a toggle in the phone's top bar, and
@@ -162,9 +155,9 @@ also produces such a file, so it is not proof of a crash.
 
 - Launch, touch editing, the full interface.
 - **File › Open** (and Open As) through the Storage Access Framework. Several files can be picked.
-- **Save**, **Save As** and **Export** write through MediaStore to `Download/PhotoCraft/Projects`
-  for PSD/PSB/PSDT/PCRAFT/ORA documents, or `Download/PhotoCraft/Output` for other formats. Saving
-  the same name again replaces the copy this app wrote earlier.
+- Ordinary **Save** and exports use MediaStore: `Download/PhotoCraft/Projects` for PSD/PSB/PSDT/PCRAFT/ORA
+  and `Download/PhotoCraft/Output` for other formats. **Save As** opens the Android system picker so the
+  user can choose a name and destination without broad storage permission.
 - Preferences, crash recovery (autosave and restore) and brush presets live in app-private storage.
 - Links (Help, and so on) open in the browser.
 - The UI stays clear of the status bar, the navigation bar, the display cutout and the soft keyboard
@@ -174,33 +167,31 @@ also produces such a file, so it is not proof of a crash.
 
 - Placing files (Place Embedded/Linked), scripts, presets import and notes import need a
   synchronous file picker, which Android doesn't have. They show a message and do nothing.
-- Save doesn't ask for a location. Project documents go to `Download/PhotoCraft/Projects` and all
-  other exports to `Download/PhotoCraft/Output`. A document opened from elsewhere is saved as a new
-  file in the matching folder; it doesn't write back to its original location.
+- Ordinary Save does not ask for a destination; use Save As to choose one. A document opened from
+  elsewhere is not automatically written back to its original location.
 - Clipboard images, the stylus tilt and eraser (touch force only), and the displays' colour profiles
   are not wired up.
-- The phone layout (see the design notes) is untested on a device. Tablets and windows at least
-  600 pt on their shorter side keep the desktop layout, which is designed for a large screen.
+- The phone layout has received device testing, but not every feature has been verified. Tablets and
+  windows at least 600 pt on their shorter side keep the desktop layout.
 - Some panels still open as floating windows (the brush settings, for one), which can cover much of
   a phone's screen. The sheet holds the dock's groups; the floating windows are not moved into it.
-- Two-finger pan is in place on the canvas, but untested. There's no two-finger rotate.
+- Two-finger pan is available on the canvas; two-finger rotation is not implemented.
 - On the phone, layers, brushes and groups can't be dragged to reorder, and swatches can't be
   dropped on the canvas: use Menu › Layer › Arrange, and a swatch's menu (Apply). A swipe over these
   rows scrolls the list instead.
 - A phone draws the document on the CPU, and the GPU draws only the interface (see the design notes).
   Large documents redraw more slowly: an edit composites the whole document on the CPU, and a
-  document wider or taller than 4096 px shows at a reduced size on the canvas. Untested on a device.
+  document wider or taller than 4096 px may show at a reduced size on the canvas.
 - Screen readers (TalkBack) aren't supported: AccessKit is off on Android, because eframe doesn't
   allow it with the NativeActivity backend.
 - The APK contains arm64-v8a code only, so it runs on arm64 devices (and arm64 emulator images).
-  The library is not stripped: about 64 MB uncompressed, and the APK about 24 MB.
-- The virtual keyboard and virtual mouse are unverified on a device: the Persian letters depend on a
+  APK size depends on the build; check the CI artifact for the current size.
+- The virtual keyboard and virtual mouse still need broader device testing: the Persian letters depend on a
   system Arabic font being present (`/system/fonts`), and the keys are not shaped, so a letter shows in
   its isolated form. Their layout (the ISIRI 2901 positions and the Shift symbols) is from memory of the
   standard, not checked against a keyboard. They have no suggestions, no long-press accents, and no
-  handwriting. The double-tap window (0.35 s), the pointer's gain and its easing are not tuned on a device,
+  handwriting. The double-tap window (0.35 s), the pointer's gain and its easing may need further tuning,
   and with the pipette tool the tool's own cursor is drawn at the same point as the pointer.
-- Nothing was run on a device, so rendering, input, the picker and saves are all unverified.
 
 ## Building
 
@@ -244,7 +235,7 @@ before another build installs (its data goes with it). A fixed key committed to 
 and reverted.
 
 Install it with `adb install -r android/app/build/outputs/apk/debug/app-debug.apk`. A GitHub
-artifact is a zip file: unzip `photocraft-android-debug-apk` and install `app-debug.apk` from it.
+artifact is a zip file: download `PhotoDroid-apk`, unzip it and install the APK inside.
 
 CI also checks the APK without a device (`.github/scripts/inspect-apk.sh`): the library is packaged
 for `arm64-v8a` and exports `android_main` and `ANativeActivity_onCreate`, the manifest names the
@@ -266,8 +257,8 @@ lock file back to the branch (`[skip ci]`), which keeps the lock file in step wi
   Rust reads either on a `photocraft-read` thread, so the UI never waits on storage, and removes
   the copy afterwards. A document's bytes are held once while it opens.
 - **The phone layout.** `mobile.rs` keeps the same panels and tools, arranged for a touch screen: a
-  top bar (menus, the name, undo, redo, panels), the options of the active tool above a strip of
-  every tool with 44 pt targets, a sheet for the dock's groups, and the menus as a sheet with search.
+  top bar (menus, phone settings, undo, redo, input toggles and panels), the active tool options and
+  tool strip, a sheet for dock groups, and searchable menus. The lower strips can be collapsed.
   The canvas takes what is left. Pinch zooms, and two fingers pan. On the phone, a press held down
   does a double-click's job (the Colour chips open the picker, a gradient stop's colour edits), and
   the rows, eyes and swatches under a finger take clicks, so a swipe scrolls the list. The desktop,
@@ -279,7 +270,7 @@ lock file back to the branch (`[skip ci]`), which keeps the lock file in step wi
   and 2048-px tiles tried before didn't prevent it. The canvas stays on the CPU on phones until a
   device run shows the GPU path is safe. Desktop and web are unchanged.
 - **Saves stage bytes first.** The Java side copies from a file, so Rust writes the bytes into
-  app-private storage, asks Java to copy them into MediaStore, and removes the staged copy.
+  app-private storage, asks Java to copy them into MediaStore or the Save As URI, and removes the staged copy.
 - **The JNI surface is one method.** `PhotoCraftActivity.photocraftCall(String, String) -> String`
   takes a command and an argument, and returns `ok`, `ok<SEP>payload` or `err<SEP>message`. Events
   come back one per `poll`. `SEP` is U+001F.

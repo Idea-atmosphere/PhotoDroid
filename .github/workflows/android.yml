@@ -66,7 +66,7 @@ jobs:
         run: |
           # The step shell exits on the first failing command, so the status is taken directly.
           status=0
-          filters="color_tests layer_row_ui mobile:: virtual_input:: virtual_mouse:: grown_by_effect_reach diagnostic_log a_tap_into_text_asks_for_the_soft_keyboard"
+          filters="phone_dialog_ color_tests layer_row_ui mobile:: virtual_input:: virtual_mouse:: grown_by_effect_reach diagnostic_log a_tap_into_text_asks_for_the_soft_keyboard"
           cargo test -p photocraft-ui-egui --lib -- $filters > "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
           # The Type options of the phone's menu, on every type layer (the engine's tests).
           cargo test -p photocraft-engine --lib -- the_menu_options_change_every_type_layer >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?

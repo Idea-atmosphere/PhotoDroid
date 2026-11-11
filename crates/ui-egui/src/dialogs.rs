@@ -649,8 +649,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             (remembered.unwrap_or(size), min, resizable_max(ctx, &fields, min))
         });
         let mut given = None;
-        let fixed = (d.kind == DialogKind::LayerStyle)
-            .then(|| egui::vec2(800.0, 550.0).min((ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(640.0, 360.0))));
+        let fixed = (d.kind == DialogKind::LayerStyle).then(|| {
+            if let Some(width) = room {
+                // Desktop's 640 pt minimum is wider than a phone: give the body the phone's
+                // actual room so it can choose its stacked layout instead of overflowing.
+                egui::vec2(width, (ctx.content_rect().height() - 110.0 - lift).clamp(160.0, 550.0))
+            } else {
+                egui::vec2(800.0, 550.0).min((ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(640.0, 360.0)))
+            }
+        });
         let modal = show_modal(modal, ctx, id, resize, fixed, interactive, |ui| {
             sizing = ui.is_sizing_pass();
             let available = ui.available_size();
@@ -677,8 +684,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if about_tabs {
                 ui.set_min_width(fit(700.0));
             }
-            ui.set_max_width(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x)));
-            if web || fixed.is_some() {
+            ui.set_max_width(fit(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x))));
+            if (web && !phone) || fixed.is_some() {
                 ui.set_max_width(available.x);
                 ui.set_min_size(available);
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
@@ -712,9 +719,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             crate::field_tab::begin(ui.ctx());
             // On the phone a body taller than the screen scrolls, and the buttons below stay in reach.
-            match room.map(|_| (ui.ctx().content_rect().height() - 150.0 - lift).max(160.0)) {
+            match room.map(|_| {
+                let screen_limit = (ui.ctx().content_rect().height() - 150.0 - lift).max(80.0);
+                if fixed.is_some() { screen_limit.min(ui.available_height().max(80.0)) } else { screen_limit }
+            }) {
                 Some(h) => {
-                    egui::ScrollArea::vertical().max_height(h).auto_shrink([false, true]).show(ui, |ui| {
+                    // Some older dialog bodies still have desktop-width controls. Keep the
+                    // viewport within the phone while allowing both axes to scroll, instead of
+                    // letting a wide child push the entire modal off screen.
+                    let width = ui.available_width().min(room.unwrap_or(ui.available_width()));
+                    egui::ScrollArea::both().max_width(width).max_height(h).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
                         if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
                             outcome = Some(done);
                         }

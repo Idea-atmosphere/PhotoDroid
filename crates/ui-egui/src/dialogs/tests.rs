@@ -187,6 +187,32 @@ fn color_picker_has_inset_content_and_actions_at_the_right_edge() {
     }
 }
 
+/// A phone must not inherit Layer Style's 640-point desktop minimum: the dialog and its
+/// confirmation buttons must stay on screen. The effect list switches to the stacked layout.
+#[test]
+fn phone_dialog_layer_style_fits_and_can_be_cancelled() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.phone_layout = true;
+    app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+    app.run("layer.new.layer", serde_json::json!({})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(406.0, 842.0)).build_ui_state(|ui, app| {
+        crate::mobile::set_gestures(ui.ctx(), true);
+        show(app, ui.ctx());
+    }, app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    crate::layer_style::open(h.state_mut(), Some("bevelEmboss")).unwrap();
+    h.run_steps(5);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(406.0, 842.0));
+    for label in ["OK", "Cancel"] {
+        let rect = h.get_by_label(label).rect();
+        assert!(screen.contains_rect(rect), "{label} is outside phone screen: {rect:?}");
+    }
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().ui.dialogs.is_empty());
+}
+
 #[test]
 fn layer_style_title_gutters_can_start_drags() {
     use egui_kittest::{Harness, kittest::Queryable};

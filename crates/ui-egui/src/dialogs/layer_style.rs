@@ -941,9 +941,16 @@ pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Ma
     let room = ui.available_width();
     let stacked = crate::mobile::gestures_on(ui.ctx()) && stack_pages(room);
     let list_w = if stacked { room } else { LIST_W };
+    // Put the actions at the top on a narrow screen, where a fixed desktop side column could
+    // otherwise be far below the scrollable effects list and parameter page.
+    if stacked {
+        outcome = phone_actions(app, ui, f, &mut new_style);
+        ui.add_space(4.0);
+    }
     let layout = if stacked { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
     ui.with_layout(layout, |ui| {
-        boxed(ui, list_w, height, |ui, h| {
+        let list_height = if stacked { 180.0 } else { height };
+        boxed(ui, list_w, list_height, |ui, h| {
             egui::ScrollArea::vertical().id_salt("layer-style-effects").max_height(h - BAR_H).auto_shrink(false).show(ui, |ui| effect_list(ui, f, &selected));
             list_bar(ui, f, &selected);
         });
@@ -953,17 +960,20 @@ pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Ma
             ui.add_space(6.0);
         }
         let page_w = if stacked { room } else { ui.available_width() - SIDE_W - ui.spacing().item_spacing.x };
-        boxed(ui, page_w, height, |ui, h| {
+        let page_height = if stacked { 360.0 } else { height };
+        boxed(ui, page_w, page_height, |ui, h| {
             egui::ScrollArea::vertical()
                 .id_salt("layer-style-page")
                 .max_height(h)
                 .auto_shrink(false)
                 .show(ui, |ui| page(app, ui, f, &selected, invalid.as_deref(), &mut style_click));
         });
-        ui.vertical(|ui| {
-            ui.set_width(SIDE_W);
-            outcome = side_column(app, ui, f, &mut new_style);
-        });
+        if !stacked {
+            ui.vertical(|ui| {
+                ui.set_width(SIDE_W);
+                outcome = side_column(app, ui, f, &mut new_style);
+            });
+        }
     });
     // Style swatch clicks apply to the layer (Photoshop does this immediately);
     // New Style… saves the dialog's pending state as a preset.
@@ -1378,7 +1388,7 @@ const PAGE_W: f32 = 330.0;
 /// Does the effect list go above the parameters? It does where the body is narrower than both side
 /// by side, with the rule between them (the phone layout).
 fn stack_pages(room: f32) -> bool {
-    room < LIST_W + 9.0 + PAGE_W + 16.0
+    room < LIST_W + PAGE_W + SIDE_W + 24.0
 }
 
 const SIDE_W: f32 = 112.0;
@@ -1811,6 +1821,25 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
 }
 
 /// Photoshop's right-hand column: OK, Cancel, New Style…, Preview and the preview swatch.
+/// Touch layout keeps the same actions and preview, without a desktop-width side column.
+fn phone_actions(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, new_style: &mut bool) -> Option<bool> {
+    let mut outcome = None;
+    ui.horizontal_wrapped(|ui| {
+        let w = ((ui.available_width() - 20.0) / 3.0).clamp(62.0, 112.0);
+        if widgets::primary_button(ui, tl!("OK"), w).clicked() { outcome = Some(true); }
+        if widgets::secondary_button(ui, tl!("Cancel"), w).clicked() { outcome = Some(false); }
+        if widgets::secondary_button(ui, tl!("New Style…"), w).clicked() { *new_style = true; }
+    });
+    ui.horizontal(|ui| {
+        let mut preview = f.get("preview").and_then(Value::as_bool).unwrap_or(true);
+        if widgets::checkbox(ui, &mut preview, tl!("Preview")).changed() {
+            f.insert("preview".into(), json!(preview));
+        }
+        preview_swatch(app, ui, f, 40.0);
+    });
+    outcome
+}
+
 fn side_column(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, new_style: &mut bool) -> Option<bool> {
     let mut outcome = None;
     if widgets::primary_button(ui, tl!("OK"), SIDE_W).clicked() {
