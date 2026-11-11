@@ -805,8 +805,12 @@ pub(crate) fn family_picker_in(
             d.insert_temp(filters_id, filters);
             d.insert_temp(expanded_id, expanded);
             match &tapped_family {
-                Some(f) => d.insert_temp(tapped_id, f.clone()),
-                None => d.remove::<String>(tapped_id),
+                Some(f) => {
+                    d.insert_temp(tapped_id, f.clone());
+                }
+                None => {
+                    d.remove::<String>(tapped_id);
+                }
             }
             d.insert_temp(body_id, body.translate(egui::vec2(-origin, 0.0)));
             if let Some(f) = &hovered {
