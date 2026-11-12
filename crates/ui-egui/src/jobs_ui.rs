@@ -187,6 +187,18 @@ pub struct JobsUi {
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
+    let operation = crate::action_diagnostic_log::command(id);
+    if let Some(op) = operation {
+        crate::action_diagnostic_log::record(op, crate::action_diagnostic_log::Event::Started);
+    }
+    let result = run_inner(app, id, params);
+    if let Some(op) = operation {
+        crate::action_diagnostic_log::record(op, crate::action_diagnostic_log::result(&result));
+    }
+    result
+}
+
+fn run_inner(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
     // A place is also a job where there are no threads (the web build): the session steps it a
     // slice per frame, and every other command stays synchronous there.
     let place = matches!(id, "file.placeEmbedded" | "file.placeLinked") && place_in_background(app);
@@ -449,6 +461,8 @@ fn warnings_of(v: &Value) -> Vec<String> {
 /// A background save ended: record it, or report why not. The close prompt waiting on it moves
 /// on, or asks again.
 fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, label: &str, outcome: JobOutcome) {
+    use crate::action_diagnostic_log::{Operation, record};
+    record(Operation::Save, crate::action_diagnostic_log::job_outcome(&outcome));
     match outcome {
         JobOutcome::Done(v) => {
             if save.automation {
@@ -581,6 +595,9 @@ pub fn try_cancel(app: &mut PhotocraftApp, id: JobId) -> Result<(), CancelRefuse
 /// Handles one finished job: optional completion beep, waiting control replies, and the
 /// command-specific open, save, transform and recovery paths.
 fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
+    if let Some(op) = crate::action_diagnostic_log::command(&e.command) {
+        crate::action_diagnostic_log::record(op, crate::action_diagnostic_log::job_outcome(&e.outcome));
+    }
     let cancelled_batch =
         e.command == "file.automate.batch" && matches!(&e.outcome, JobOutcome::Done(result) if result.get("cancelled").and_then(Value::as_bool) == Some(true));
     // Preferences ▸ General ▸ Beep When Done (off by default): a finished operation beeps, like

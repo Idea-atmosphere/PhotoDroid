@@ -549,6 +549,20 @@ impl PhotocraftApp {
     /// `None` when the save went to a background job (#2017), which finishes it in
     /// [`jobs_ui::tick`].
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        use crate::action_diagnostic_log::{Event, Operation, record};
+        record(Operation::Save, Event::Started);
+        let result = self.write_document_inner(path, settings, copy);
+        let event = match &result {
+            Ok(Some(_)) if self.services.write_unconfirmed && !(self.background_jobs && self.services.save_file.is_some()) => Event::Unconfirmed,
+            Ok(Some(_)) => Event::Succeeded,
+            Ok(None) => Event::Pending,
+            Err(_) => Event::Failed,
+        };
+        record(Operation::Save, event);
+        result
+    }
+
+    fn write_document_inner(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
         if self.background_jobs
             && let Some(save) = self.services.save_file.clone()
         {

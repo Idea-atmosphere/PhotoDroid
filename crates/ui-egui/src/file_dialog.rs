@@ -185,8 +185,10 @@ impl PhotocraftApp {
         // Save As appends the extension of the chosen file type.
         let suggested_ext = suggested.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
         let ext = suggested_ext.clone();
+        let operation = if export { crate::action_diagnostic_log::Operation::Export } else { crate::action_diagnostic_log::Operation::Save };
         let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => {
+                crate::action_diagnostic_log::record(operation, crate::action_diagnostic_log::Event::PickerSelected);
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
                 let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
@@ -195,7 +197,14 @@ impl PhotocraftApp {
                 if !export && let Some((doc, dir)) = dir.clone() {
                     app.save_dirs.insert(doc, dir);
                 }
-                let exported = then(app, path.clone())?;
+                if export {
+                    crate::action_diagnostic_log::record(operation, crate::action_diagnostic_log::Event::Started);
+                }
+                let result = then(app, path.clone());
+                if export && result.is_ok() {
+                    crate::action_diagnostic_log::record(operation, crate::action_diagnostic_log::result(&result));
+                }
+                let exported = result?;
                 if export {
                     if let Some((doc, dir)) = dir {
                         app.save_dirs.insert(doc, dir);
@@ -205,10 +214,27 @@ impl PhotocraftApp {
                 Ok(exported)
             }
             _ => Err(UNEXPECTED.into()),
-        })?;
+        });
+        let asked = match asked {
+            Ok(value) => value,
+            Err(error) => {
+                let event = if error == CANCELLED { crate::action_diagnostic_log::Event::Cancelled } else { crate::action_diagnostic_log::Event::Failed };
+                crate::action_diagnostic_log::record(operation, event);
+                return Err(error);
+            }
+        };
+        crate::action_diagnostic_log::record(operation, crate::action_diagnostic_log::Event::PickerOpened);
         if let Some(p) = self.file_dialog.as_mut() {
             p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
         }
+        // The picker answers asynchronously. Its result may be cancellation or an unavailable
+        // provider; the continuation may also fail. Never include its error text or chosen path.
+        self.after_file_dialog(move |_, result| {
+            if result.is_err() {
+                crate::action_diagnostic_log::record(operation, crate::action_diagnostic_log::result(&result));
+            }
+            result
+        });
         Ok(asked)
     }
 

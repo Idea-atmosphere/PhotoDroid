@@ -87,6 +87,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.write_answered_save(ctx, p.doc, p.path, &settings, p.copy, (p.record, step));
     } else if cancel {
         app.targa_options = None;
+        crate::action_diagnostic_log::record(crate::action_diagnostic_log::Operation::Save, crate::action_diagnostic_log::Event::Cancelled);
         app.ui.status = tl!("Save canceled").into();
         app.ui.status_error = false;
     }

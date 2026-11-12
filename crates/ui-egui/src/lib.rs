@@ -24,6 +24,7 @@ macro_rules! tl {
         $crate::i18n::t($s)
     };
 }
+mod action_diagnostic_log;
 mod brush_mode_menu;
 pub mod canvas;
 pub mod control;
