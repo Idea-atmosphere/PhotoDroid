@@ -6,6 +6,18 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let operation = crate::action_diagnostic_log::command(id);
+        if let Some(op) = operation {
+            crate::action_diagnostic_log::record(op, crate::action_diagnostic_log::Event::Started);
+        }
+        let result = self.run_with_status(id, params);
+        if let Some(op) = operation {
+            crate::action_diagnostic_log::record(op, crate::action_diagnostic_log::result(&result));
+        }
+        result
+    }
+
+    fn run_with_status(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;

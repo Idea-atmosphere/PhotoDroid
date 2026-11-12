@@ -1200,7 +1200,11 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
-    let operation = closed.fields.get("__command").and_then(Value::as_str).and_then(crate::action_diagnostic_log::command)
+    let operation = closed
+        .fields
+        .get("__command")
+        .and_then(Value::as_str)
+        .and_then(crate::action_diagnostic_log::command)
         .or_else(|| closed.fields.contains_key("__export").then_some(crate::action_diagnostic_log::Operation::Export));
     if let Some(op) = operation {
         crate::action_diagnostic_log::record(op, crate::action_diagnostic_log::Event::Cancelled);

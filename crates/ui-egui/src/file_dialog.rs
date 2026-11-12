@@ -202,7 +202,13 @@ impl PhotocraftApp {
                 }
                 let result = then(app, path.clone());
                 if export && result.is_ok() {
-                    crate::action_diagnostic_log::record(operation, crate::action_diagnostic_log::result(&result));
+                    let event = crate::action_diagnostic_log::result(&result);
+                    let event = if event == crate::action_diagnostic_log::Event::Succeeded && app.services.write_unconfirmed {
+                        crate::action_diagnostic_log::Event::Unconfirmed
+                    } else {
+                        event
+                    };
+                    crate::action_diagnostic_log::record(operation, event);
                 }
                 let exported = result?;
                 if export {

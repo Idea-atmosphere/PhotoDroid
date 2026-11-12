@@ -187,18 +187,6 @@ pub struct JobsUi {
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
-    let operation = crate::action_diagnostic_log::command(id);
-    if let Some(op) = operation {
-        crate::action_diagnostic_log::record(op, crate::action_diagnostic_log::Event::Started);
-    }
-    let result = run_inner(app, id, params);
-    if let Some(op) = operation {
-        crate::action_diagnostic_log::record(op, crate::action_diagnostic_log::result(&result));
-    }
-    result
-}
-
-fn run_inner(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
     // A place is also a job where there are no threads (the web build): the session steps it a
     // slice per frame, and every other command stays synchronous there.
     let place = matches!(id, "file.placeEmbedded" | "file.placeLinked") && place_in_background(app);
