@@ -1094,7 +1094,23 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             });
             let tab = *group.tab_mut(&mut app.ui.dock_tabs.clone());
-            crate::panels::dock_body(app, ui, group, tab);
+            // As in the desktop dock, only wrap bodies that do not already own a scroller.
+            // In particular, type Properties can be much taller than this phone sheet.
+            if group.scrolls_itself(tab) {
+                crate::panels::dock_body(app, ui, group, tab);
+            } else {
+                ui.spacing_mut().scroll.fade.strength = 0.0;
+                let _out = egui::ScrollArea::vertical()
+                    .id_salt(("phone-panel-body", group.key(), tab))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| crate::panels::dock_body(app, ui, group, tab));
+                #[cfg(test)]
+                ui.data_mut(|d| {
+                    d.insert_temp(egui::Id::unique("test-phone-panel-scroll-viewport"), _out.inner_rect);
+                    d.insert_temp(egui::Id::unique("test-phone-panel-scroll-offset"), _out.state.clamped_offset().y);
+                    d.insert_temp(egui::Id::unique("test-phone-panel-scroll-content"), _out.content_size.y);
+                });
+            }
         });
     if close {
         set_flag(&ctx, sheet_open_id(), false);
@@ -1592,6 +1608,55 @@ mod tests {
         h.get_by_label("System keyboard").click();
         h.run_steps(2);
         assert!(!h.state().virtual_input.system_keyboard_disabled());
+    }
+
+    /// Exercise the real phone sheet and a selected text layer, in both orientations. The
+    /// viewport must be bounded and a touch drag must reveal content below its first screen.
+    #[test]
+    fn phone_text_properties_sheet_scrolls_by_touch() {
+        use egui_kittest::Harness;
+        for size in [vec2(406.0, 904.0), vec2(904.0, 406.0)] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            app.run("type.create", json!({"x": 10, "y": 40, "text": "Example", "size": 24})).unwrap();
+            let viewport_id = egui::Id::unique("test-phone-panel-scroll-viewport");
+            let offset_id = egui::Id::unique("test-phone-panel-scroll-offset");
+            let content_id = egui::Id::unique("test-phone-panel-scroll-content");
+            let mut h = Harness::builder().with_size(size).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if fonts_bound(ui.ctx()) {
+                        set_gestures(ui.ctx(), true);
+                        sheet(app, ui);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            set_flag(&h.ctx, sheet_open_id(), true);
+            h.ctx.data_mut(|d| d.insert_temp(sheet_group_id(), Group::Properties));
+            h.run_steps(6);
+            let viewport = h.ctx.data(|d| d.get_temp::<egui::Rect>(viewport_id)).expect("phone properties viewport");
+            let content = h.ctx.data(|d| d.get_temp::<f32>(content_id)).expect("phone properties content height");
+            assert!(content > viewport.height() + 30.0, "text properties should overflow {size:?}: {content} / {viewport:?}");
+            let from = egui::pos2(viewport.left() + 5.0, viewport.bottom() - 20.0);
+            let to = from - vec2(0.0, 100.0_f32.min(viewport.height() - 30.0));
+            let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+            h.hover_at(from);
+            h.event(touch(egui::TouchPhase::Start, from));
+            h.drag_at(from);
+            h.run_steps(2);
+            for i in 1..=8 {
+                let at = from + (to - from) * (i as f32 / 8.0);
+                h.event(touch(egui::TouchPhase::Move, at));
+                h.hover_at(at);
+                h.run_steps(1);
+            }
+            h.event(touch(egui::TouchPhase::End, to));
+            h.drop_at(to);
+            h.run_steps(3);
+            let offset = h.ctx.data(|d| d.get_temp::<f32>(offset_id)).unwrap_or_default();
+            assert!(offset > 20.0, "touch should scroll text properties at {size:?}, got {offset}");
+        }
     }
 
     #[test]
