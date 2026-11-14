@@ -1,0 +1,23 @@
+# Owners of the paths that can see or influence the release signing key.
+#
+# Review is only enforced when the `protect-main` ruleset (or a classic branch
+# protection rule on `main`) enables "Require review from Code Owners". Without
+# that toggle this file is just a label.
+#
+# Every path below can end up running with `ANDROID_KEYSTORE_BASE64`,
+# `ANDROID_STORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` in its
+# environment, so a change here must never be merged unreviewed.
+
+# The CI itself.
+/.github/               @Idea-atmosphere
+/.github/workflows/     @Idea-atmosphere
+/.github/scripts/       @Idea-atmosphere
+
+# Gradle wiring that reads the keystore and the signing passwords.
+/android/app/build.gradle       @Idea-atmosphere
+/android/app/build.gradle.kts   @Idea-atmosphere
+/android/gradle.properties      @Idea-atmosphere
+/android/settings.gradle        @Idea-atmosphere
+/android/settings.gradle.kts    @Idea-atmosphere
+/android/build.gradle           @Idea-atmosphere
+/android/build.gradle.kts       @Idea-atmosphere

@@ -1,0 +1,270 @@
+name: Android
+
+on:
+  # CI only runs for pushes to `main` and for pull requests.
+  #
+  # It deliberately does NOT run on pushes to arbitrary branches: a push to a
+  # feature branch is exactly what an unreviewed collaborator (or a stolen
+  # token) does first, and GitHub has no "approve this run" gate for pushes that
+  # come from inside the repository. Opening a pull request is the reviewed
+  # path, and pull requests from forks need approval in
+  # Settings > Actions > General > "Fork pull request workflows".
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 27.2.12479018
+  BUILD_TOOLS_VERSION: 36.0.0
+  # Command-line tools for the SDK manager (Google's Linux download; the version is pinned).
+  CMDLINE_TOOLS_URL: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+
+jobs:
+  host-tests:
+    name: Host tests (protocol and saved-layout code)
+    if: "!contains(github.event.head_commit.message, '[skip android-ci]')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Test the host-side code
+        run: cargo test -p photocraft-android
+      - name: Test the diagnostic log
+        run: "cargo test -p photocraft-doc --lib diag::"
+      - name: Test the legacy PSD text origin
+        run: "cargo test -p photocraft-text --lib legacy_tysh_point_origin"
+
+  # The interface tests for the touch gestures. The APK job builds the library without its tests, so
+  # these run here; the filters pick the tests of the phone layout, the touch-only gestures, the soft
+  # keyboard on a tap into text, the virtual keyboard and wheel, and the Type options that change every
+  # type layer.
+  ui-tests:
+    name: Interface tests (touch gestures and the phone layout)
+    if: "!contains(github.event.head_commit.message, '[skip android-ci]')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ui-tests
+          cache-on-failure: true
+      - name: Run the interface tests
+        shell: bash
+        run: |
+          # The step shell exits on the first failing command, so the status is taken directly.
+          status=0
+          filters="phone_dialog_ color_tests layer_row_ui mobile:: virtual_input:: virtual_mouse:: grown_by_effect_reach diagnostic_log a_tap_into_text_asks_for_the_soft_keyboard"
+          cargo test -p photocraft-ui-egui --lib -- $filters > "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
+          # The Type options of the phone's menu, on every type layer (the engine's tests).
+          cargo test -p photocraft-engine --lib -- the_menu_options_change_every_type_layer >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
+          # The diagnostic log's lines for an open (the engine's tests), so a PSD's open is in the log.
+          cargo test -p photocraft-engine --lib -- an_open_writes_its_decode_and_its_document_to_the_log >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
+          # Save Contents reaches every instance of a smart object that shares its contents (the engine's tests).
+          cargo test -p photocraft-engine --lib -- save_contents_updates_every_instance_that_shares_the_source >> "$RUNNER_TEMP/ui-tests.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/ui-tests.log"
+          if [ "$status" -ne 0 ]; then
+            bash .github/scripts/report-failure.sh "Interface tests failed" "$RUNNER_TEMP/ui-tests.log"
+            exit "$status"
+          fi
+
+  apk:
+    name: Build the arm64 APK
+    if: "!contains(github.event.head_commit.message, '[skip android-ci]')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      # Pushing the regenerated Cargo.lock back to the branch (below) needs write access.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install the Android SDK packages
+        shell: bash
+        run: |
+          set -eo pipefail
+          SDK="$HOME/android-sdk"
+          if [ ! -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL -o "$RUNNER_TEMP/cmdline-tools.zip" "$CMDLINE_TOOLS_URL"
+            unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
+            mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          fi
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses > "$RUNNER_TEMP/licenses.log" 2>&1 || true
+          if ! "$SDKMANAGER" --sdk_root="$SDK" "platforms;android-35" "build-tools;${BUILD_TOOLS_VERSION}" "ndk;${NDK_VERSION}" > "$RUNNER_TEMP/sdk.log" 2>&1; then
+            bash .github/scripts/report-failure.sh "Android SDK install failed" "$RUNNER_TEMP/sdk.log"
+            tail -n 40 "$RUNNER_TEMP/sdk.log"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: android-arm64
+          # Keep the compiled dependencies even when this build fails, so the next run starts
+          # from them.
+          cache-on-failure: true
+
+      - name: Point Cargo at the NDK's clang
+        shell: bash
+        run: |
+          NDK="$ANDROID_HOME/ndk/$NDK_VERSION"
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -x "$BIN/aarch64-linux-android29-clang" ]; then
+            echo "::error title=NDK missing::no clang at $BIN"
+            ls "$ANDROID_HOME/ndk" || true
+            exit 1
+          fi
+          {
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android29-clang"
+            echo "CC_aarch64_linux_android=$BIN/aarch64-linux-android29-clang"
+            echo "CXX_aarch64_linux_android=$BIN/aarch64-linux-android29-clang++"
+            echo "AR_aarch64_linux_android=$BIN/llvm-ar"
+          } >> "$GITHUB_ENV"
+
+      # If the Android dependencies changed, cargo updates Cargo.lock here, and the lock commit step
+      # records the result. --keep-going reports every crate that fails, not just the first.
+      - name: Build libphotocraft_android.so
+        shell: bash
+        run: |
+          status=0
+          cargo build -p photocraft-android --lib --target aarch64-linux-android --profile android \
+            --keep-going --message-format=short > "$RUNNER_TEMP/cargo-build.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/cargo-build.log"
+          if [ "$status" -ne 0 ]; then
+            bash .github/scripts/report-failure.sh "cargo build failed" "$RUNNER_TEMP/cargo-build.log"
+            exit "$status"
+          fi
+
+      - name: Put the library in the APK
+        shell: bash
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/android/libphotocraft_android.so android/app/src/main/jniLibs/arm64-v8a/
+
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Decode signing keystore outside the workspace
+        id: keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/release.jks"
+            if [ ! -s "$RUNNER_TEMP/release.jks" ]; then
+              echo "::error::Decoded keystore is empty. Re-create ANDROID_KEYSTORE_BASE64 with: base64 -w0 keystore.jks"
+              exit 1
+            fi
+            echo "has_keystore=true" >> "$GITHUB_OUTPUT"
+            echo "Keystore decoded ($(stat -c%s "$RUNNER_TEMP/release.jks") bytes)."
+          else
+            echo "has_keystore=false" >> "$GITHUB_OUTPUT"
+            echo "ANDROID_KEYSTORE_BASE64 not available (e.g. fork PR); falling back to debug signing."
+          fi
+
+      - name: Build the APK
+        id: build_apk
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          HAS_KEYSTORE: ${{ steps.keystore.outputs.has_keystore }}
+        shell: bash
+        run: |
+          status=0
+          if [ "$HAS_KEYSTORE" = "true" ]; then
+            gradle -p android :app:assembleRelease --no-daemon > "$RUNNER_TEMP/gradle.log" 2>&1 || status=$?
+            APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
+          else
+            gradle -p android :app:assembleDebug --no-daemon > "$RUNNER_TEMP/gradle.log" 2>&1 || status=$?
+            APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
+          fi
+          cat "$RUNNER_TEMP/gradle.log"
+          if [ "$status" -ne 0 ]; then
+            bash .github/scripts/report-failure.sh "Gradle build failed" "$RUNNER_TEMP/gradle.log"
+            exit "$status"
+          fi
+          if [ "$HAS_KEYSTORE" = "true" ]; then
+            "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify "$APK_PATH"
+          fi
+          DEST="android/app/build/outputs/apk/PhotoDroid.apk"
+          cp "$APK_PATH" "$DEST"
+          echo "apk_path=$DEST" >> "$GITHUB_OUTPUT"
+
+      - name: Destroy the keystore
+        if: always()
+        shell: bash
+        run: shred -u "$RUNNER_TEMP/release.jks" 2>/dev/null || rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Describe what Gradle built
+        if: always()
+        env:
+          APK: ${{ steps.build_apk.outputs.apk_path }}
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/build-tree.txt"
+          {
+            echo "java sources:"; find android/app/src/main/java -type f
+            echo "class files:"; find android/app/build -name '*.class' 2>/dev/null | head -n 40
+            echo "dex files:"; find android/app/build -name '*.dex' -exec ls -l {} + 2>/dev/null
+            echo "apk:"; unzip -l "$APK" 2>/dev/null
+            echo "dex strings:"; unzip -p "$APK" classes.dex 2>/dev/null | strings -n 6 | head -n 25
+          } > "$out" 2>&1 || true
+          bash .github/scripts/notice-file.sh "build tree" "$out"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: PhotoDroid-apk
+          path: ${{ steps.build_apk.outputs.apk_path }}
+          if-no-files-found: error
+
+      - name: Commit the Cargo.lock that built
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already matches the build."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Update Cargo.lock for the Android dependencies [skip android-ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning title=Cargo.lock::could not push the regenerated Cargo.lock (another push landed first?)"
+
+      - name: Check the APK's contents
+        env:
+          APK: ${{ steps.build_apk.outputs.apk_path }}
+        run: |
+          bash .github/scripts/inspect-apk.sh "$APK" \
+            "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" \
+            "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt2"
