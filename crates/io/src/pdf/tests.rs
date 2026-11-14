@@ -49,6 +49,29 @@ fn has(pdf: &[u8], needle: &str) -> bool {
     pdf.windows(needle.len()).any(|w| w == needle.as_bytes())
 }
 
+/// lopdf 0.42 prefers a Type3 font's glyph-name Encoding over its ToUnicode map, although
+/// Unicode extraction needs the latter. Inspect the actual font first, then remove Encoding
+/// only from a cloned in-memory document so lopdf can verify the map. The PDF bytes and the
+/// app's export code are never changed by this test-only compatibility workaround.
+fn selection_text(doc: &lopdf::Document) -> String {
+    let mut doc = doc.clone();
+    let mut selection_fonts = 0;
+    for object in doc.objects.values_mut() {
+        let Ok(font) = object.as_dict_mut() else { continue };
+        if font.get(b"Name").and_then(Object::as_name).ok() != Some(b"FSelect") {
+            continue;
+        }
+        assert!(font.get(b"ToUnicode").is_ok(), "the selection font must have a Unicode map");
+        assert!(font.get(b"CharProcs").is_ok(), "the selection font must have its glyph procedures");
+        let encoding = font.get(b"Encoding").and_then(Object::as_dict).expect("selection font encoding");
+        assert!(encoding.get(b"Differences").is_ok(), "the original font must define glyph codes");
+        assert!(font.remove(b"Encoding").is_some());
+        selection_fonts += 1;
+    }
+    assert!(selection_fonts > 0, "the PDF must contain a selection font");
+    doc.extract_text(&[1]).expect("extract text through ToUnicode")
+}
+
 fn check_structure(pdf: &[u8]) {
     assert!(pdf.starts_with(b"%PDF-1."), "PDF header");
     assert!(pdf.ends_with(b"%%EOF\n"), "EOF marker");
@@ -142,7 +165,7 @@ fn topmost_text_layer_is_exported_with_selectable_text_and_vector_outlines() {
     let tm = format!("{} {} Tm", origin.x, origin.y);
     assert!(content.lines().any(|line| line.ends_with(tm.as_str())), "the translated text starts at {tm}:\n{content}");
     let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
-    assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Vector PDF");
+    assert_eq!(selection_text(&parsed).trim(), "Vector PDF");
     assert!(content.contains("ET"));
     assert!(content.contains("EMC"));
     assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), vec![255; 4 * 2 * 3]);
@@ -229,7 +252,7 @@ fn unicode_text_over_a_photo_extracts_through_a_pdf_reader() {
     ));
     let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
     let parsed = lopdf::Document::load_mem(&pdf).unwrap();
-    assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), text);
+    assert_eq!(selection_text(&parsed).trim(), text);
     assert!(has(&pdf, "/Subtype /Image"));
     assert!(has(&pdf, "/Subtype /Type3"));
     assert!(has(&pdf, "/ToUnicode"));
@@ -307,7 +330,7 @@ fn text_outside_the_vector_prefix_does_not_consume_the_selection_font() {
         ));
         let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
         let parsed = lopdf::Document::load_mem(&pdf).unwrap();
-        assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Hi", "case {case}: only the top text is selectable");
+        assert_eq!(selection_text(&parsed).trim(), "Hi", "case {case}: only the top text is selectable");
         let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
         assert!(content.contains("/ActualText <FEFF0048"), "case {case}: the top text must stay vector:\n{content}");
         assert!(content.contains("/FSelect"), "case {case}");
@@ -365,7 +388,7 @@ fn a_text_layer_refused_at_emission_keeps_the_upper_vectors_and_stays_raster() {
     assert!(!content.contains("1 0 0 rg"), "the refused layer must not be vector:\n{content}");
     assert!(!content.contains("/ActualText <FEFF0054"), "its text must stay out of the selection plane:\n{content}");
     let parsed = lopdf::Document::load_mem(&pdf).unwrap();
-    assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Hi", "only the upper text is selectable");
+    assert_eq!(selection_text(&parsed).trim(), "Hi", "only the upper text is selectable");
     let img = stream_after(&pdf, "/Subtype /Image");
     assert!(
         img.chunks(3).any(|p| i16::from(p[0]) - i16::from(p[1]) > 8 && i16::from(p[0]) - i16::from(p[2]) > 8),
@@ -380,7 +403,7 @@ fn multiline_text_keeps_its_paragraph_breaks_in_the_selection() {
     d.layers.push(Layer::new("Text", LayerContent::Text(TextLayer { text: "A\nB".into(), size_pt: 12.0, ..Default::default() })));
     let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
     let parsed = lopdf::Document::load_mem(&pdf).unwrap();
-    assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "A\nB", "the paragraph break survives selection");
+    assert_eq!(selection_text(&parsed).trim(), "A\nB", "the paragraph break survives selection");
     let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
     assert!(content.contains("/ActualText <FEFF0041000A"), "the first span carries the break:\n{content}");
 }
