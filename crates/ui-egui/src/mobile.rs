@@ -1659,6 +1659,126 @@ mod tests {
         }
     }
 
+    /// The real phone sheet, with an unselected text layer and Android-style touch events.
+    fn phone_layer_harness(size: Vec2, mask: bool) -> (egui_kittest::Harness<'static, PhotocraftApp>, u64) {
+        use egui_kittest::Harness;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        let id = app.run("type.create", json!({"x": 10, "y": 40, "text": "Example", "name": "Title", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+        if mask {
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.run("prefs.set", json!({"values": {"tools.doubleClickLayerMaskLaunchesSelectAndMask": false}})).unwrap();
+        }
+        app.run("layer.new.layer", json!({"name": "Other"})).unwrap();
+        let mut h = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) {
+                    set_gestures(ui.ctx(), true);
+                    sheet(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        set_flag(&h.ctx, sheet_open_id(), true);
+        h.ctx.data_mut(|d| d.insert_temp(sheet_group_id(), Group::Layers));
+        h.run_steps(6);
+        (h, id)
+    }
+
+    fn phone_layer_row(h: &egui_kittest::Harness<'_, PhotocraftApp>, id: u64) -> crate::layer_row_ui::RowRects {
+        crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == id).expect("text layer row visible")
+    }
+
+    fn phone_tap(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, at: egui::Pos2, id: u64) {
+        let event = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: at, force: None };
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.event(event(egui::TouchPhase::Start));
+        h.event(egui::Event::PointerMoved(at));
+        h.event(button(true));
+        h.step();
+        h.event(event(egui::TouchPhase::End));
+        h.event(button(false));
+        h.event(egui::Event::PointerGone);
+        h.step();
+    }
+
+    #[test]
+    fn phone_layer_thumbnail_double_tap_edits_text_with_finger_jitter() {
+        for size in [vec2(406.0, 904.0), vec2(904.0, 406.0)] {
+            let (mut h, id) = phone_layer_harness(size, false);
+            let thumb = phone_layer_row(&h, id).thumbnail.unwrap();
+            phone_tap(&mut h, thumb.center() - vec2(4.0, 0.0), 1);
+            h.run_steps(20); // 0.33 s: longer than egui's mouse double-click threshold.
+            phone_tap(&mut h, thumb.center() + vec2(4.0, 0.0), 2);
+            h.run_steps(3);
+            assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(id), "text thumbnail at {size:?}");
+            assert!(h.state().ui.dialogs.is_empty(), "no Layer Style dialog");
+        }
+    }
+
+    #[test]
+    fn phone_layer_thumbnail_edge_does_not_open_layer_style() {
+        let (mut h, id) = phone_layer_harness(vec2(406.0, 904.0), false);
+        let row = phone_layer_row(&h, id);
+        let thumb = row.thumbnail.unwrap();
+        let first = egui::pos2(thumb.center().x, thumb.bottom() - 1.0);
+        let second = egui::pos2(thumb.center().x, thumb.bottom() + 3.0);
+        assert!(row.row.contains(second) && !thumb.expand(2.0).contains(second));
+        phone_tap(&mut h, first, 1);
+        phone_tap(&mut h, second, 2);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(id));
+        assert!(h.state().ui.dialogs.is_empty(), "the padding must not open Layer Style");
+    }
+
+    #[test]
+    fn phone_thumbnail_taps_do_not_pair_across_targets_or_after_timeout() {
+        for intervening in [true, false] {
+            let (mut h, id) = phone_layer_harness(vec2(406.0, 904.0), false);
+            let row = phone_layer_row(&h, id);
+            let thumb = row.thumbnail.unwrap().center();
+            phone_tap(&mut h, thumb, 1);
+            if intervening {
+                phone_tap(&mut h, row.name.unwrap().center(), 2);
+            } else {
+                h.run_steps(35); // more than the half-second double-tap window
+            }
+            phone_tap(&mut h, thumb, 3);
+            h.run_steps(3);
+            assert!(h.state().ui.text_edit.is_none(), "unrelated or delayed taps must not open the text editor");
+        }
+    }
+
+    #[test]
+    fn phone_layer_name_mask_and_empty_row_keep_their_double_tap_actions() {
+        for target in ["name", "mask", "empty"] {
+            let (mut h, id) = phone_layer_harness(vec2(406.0, 904.0), true);
+            let row = phone_layer_row(&h, id);
+            let at = match target {
+                "name" => row.name.unwrap().center(),
+                "mask" => crate::mask_thumbs_ui::recorded(&h.ctx, id)
+                    .unwrap()
+                    .0
+                    .into_iter()
+                    .find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel)
+                    .unwrap()
+                    .1
+                    .center(),
+                _ => egui::pos2(row.row.right() - 25.0, row.row.center().y),
+            };
+            phone_tap(&mut h, at, 1);
+            phone_tap(&mut h, at, 2);
+            h.run_steps(3);
+            assert!(h.state().ui.text_edit.is_none(), "{target} must not edit the text");
+            match target {
+                "name" => assert_eq!(crate::layer_row_ui::renaming(&h.ctx), Some(id)),
+                "mask" => assert!(h.state().ui.mask_target && h.state().ui.panels.properties),
+                _ => assert!(h.state().ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::LayerStyle)),
+            }
+        }
+    }
+
     #[test]
     fn opening_panels_collapses_tools_and_the_arrow_restores_them() {
         use egui_kittest::{Harness, kittest::Queryable};
