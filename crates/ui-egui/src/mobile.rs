@@ -455,10 +455,29 @@ struct StripScrollState {
     pointer_in_strip: bool,
     dragging: bool,
     press_pos: Option<egui::Pos2>,
+    active_touch: Option<(egui::TouchDeviceId, egui::TouchId)>,
     last_pos: Option<egui::Pos2>,
     press_start_offset_x: f32,
     max_travel: f32,
     velocity_x: f32,
+}
+
+/// A finger is down on either phone strip. Periodic diagnostic saves can defer briefly so their
+/// synchronous Android storage write does not interrupt a swipe (the log still records every line).
+pub(crate) fn strip_touch_in_progress(ctx: &egui::Context) -> bool {
+    if !touch_screen(ctx) {
+        return false;
+    }
+    let origin = ctx.input(|i| i.pointer.primary_down().then(|| i.pointer.press_origin()).flatten());
+    origin.is_some_and(|pos| {
+        ctx.data(|d| {
+            ["phone-tools-strip-scroll", "phone-options-strip-scroll"].iter().any(|name| {
+                d.get_temp::<StripScrollState>(egui::Id::unique(*name))
+                    .and_then(|s| s.strip_rect)
+                    .is_some_and(|r| r.expand(4.0).contains(pos))
+            })
+        })
+    })
 }
 
 fn begin_strip_scroll(
@@ -472,18 +491,29 @@ fn begin_strip_scroll(
     let strip_rect = state.strip_rect.unwrap_or_else(|| ui.max_rect()).expand(4.0);
     let diag_on = photocraft_doc::diag::enabled();
 
-    let (any_down, any_pressed, any_released, press_origin, interact_pos, raw_delta_x, dt, event_touch_pos, same_frame_restart) =
+    let (any_down, any_pressed, any_released, press_origin, interact_pos, raw_delta_x, dt, event_touch_pos, touch_start, touch_end_pos, same_frame_restart) =
         ui.input(|i| {
             let mut last_touch_pos = None;
+            let mut touch_start = None;
+            let mut touch_end_pos = None;
             let mut saw_end = false;
             let mut restart = false;
             for ev in &i.raw.events {
                 match ev {
-                    egui::Event::Touch { phase, pos, .. } => {
+                    egui::Event::Touch { device_id, id, phase, pos, .. } => {
                         last_touch_pos = Some(*pos);
                         match phase {
-                            egui::TouchPhase::End | egui::TouchPhase::Cancel => saw_end = true,
-                            egui::TouchPhase::Start if saw_end => restart = true,
+                            egui::TouchPhase::End => {
+                                saw_end = true;
+                                if state.active_touch == Some((*device_id, *id)) {
+                                    touch_end_pos = Some(*pos);
+                                }
+                            }
+                            egui::TouchPhase::Cancel => saw_end = true,
+                            egui::TouchPhase::Start => {
+                                touch_start.get_or_insert((*device_id, *id));
+                                if saw_end { restart = true; }
+                            }
                             _ => {}
                         }
                     }
@@ -510,6 +540,8 @@ fn begin_strip_scroll(
                 i.pointer.delta().x,
                 i.stable_dt.clamp(1.0 / 240.0, 0.1),
                 last_touch_pos,
+                touch_start,
+                touch_end_pos,
                 restart,
             )
         });
@@ -523,6 +555,23 @@ fn begin_strip_scroll(
 
     if !any_down || (any_released && !any_pressed && !same_frame_restart) {
         if state.pointer_in_strip {
+            // Android's final Touch::End can be newer than the last emulated PointerMoved. Do
+            // not drop that last travel; ignore small lift wobble and cancellations. This only
+            // applies after scrolling has already engaged, never to an ordinary tap or long hold.
+            if state.dragging && !block_drag && any_released && let (Some(end), Some(prev)) = (touch_end_pos, state.last_pos) {
+                let dx = end.x - prev.x;
+                if dx.abs() > 4.5 {
+                    let limit = if state.max_offset_x > 0.0 { state.max_offset_x } else { f32::MAX };
+                    state.offset_x = (state.offset_x - dx).clamp(0.0, limit);
+                    // A last-moment change of direction must not coast back the other way.
+                    if state.velocity_x.signum() == dx.signum() {
+                        state.velocity_x = 0.0;
+                    }
+                    if let Some(origin) = state.press_pos {
+                        state.max_travel = state.max_travel.max((end - origin).length());
+                    }
+                }
+            }
             if diag_on {
                 let off = state.offset_x;
                 let max_off = state.max_offset_x;
@@ -535,6 +584,7 @@ fn begin_strip_scroll(
             state.pointer_in_strip = false;
             state.dragging = false;
             state.press_pos = None;
+            state.active_touch = None;
             state.last_pos = None;
         }
         if state.velocity_x.abs() > 15.0 {
@@ -566,6 +616,7 @@ fn begin_strip_scroll(
             state.pointer_in_strip = true;
             state.dragging = false;
             state.press_pos = start_pos;
+            state.active_touch = touch_start;
             state.last_pos = interact_pos.or(start_pos);
             state.press_start_offset_x = state.offset_x;
             state.max_travel = 0.0;
@@ -581,6 +632,7 @@ fn begin_strip_scroll(
             state.pointer_in_strip = false;
             state.dragging = false;
             state.press_pos = None;
+            state.active_touch = None;
             state.last_pos = None;
             state.velocity_x = 0.0;
         }
@@ -2284,6 +2336,63 @@ mod tests {
                 "scrolled all the way to the end ({:?})",
                 final_state
             );
+        }
+    }
+
+    /// Android can deliver an End position newer than the last emulated pointer move. Both
+    /// strips must account for that final travel, even when the finger lifts outside the row.
+    #[test]
+    fn phone_strips_keep_the_last_touch_end_position() {
+        for is_options in [false, true] {
+            for (dir, to_left) in [
+                (crate::direction::Dir::Ltr, true), (crate::direction::Dir::Ltr, false),
+                (crate::direction::Dir::Rtl, true), (crate::direction::Dir::Rtl, false),
+            ] {
+                let _dir = crate::direction::direction_scope(dir);
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.phone_layout = true;
+                app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+                app.ui.tool = crate::state::Tool::Type;
+                let ctx = egui::Context::default();
+                PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+                let step = |app: &mut PhotocraftApp, time: f64, events: Vec<egui::Event>| {
+                    let mut input = egui::RawInput {
+                        time: Some(time), events,
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(360.0, 800.0))),
+                        ..Default::default()
+                    };
+                    sanitize_touch_events(&ctx, &mut input);
+                    frame(&ctx, true, input, |ui| if is_options { options(app, ui); } else { tool_strip(app, ui); });
+                };
+                step(&mut app, 0.0, vec![]);
+                step(&mut app, 0.05, vec![]);
+                let key = egui::Id::unique(if is_options { "phone-options-strip-scroll" } else { "phone-tools-strip-scroll" });
+                let initial = ctx.data(|d| d.get_temp::<StripScrollState>(key)).unwrap();
+                assert!(initial.max_offset_x > 220.0, "the strip should overflow: {initial:?}");
+                // Start at the edge opposite the direction of travel, so both directions have room.
+                if !to_left {
+                    ctx.data_mut(|d| d.insert_temp(key, StripScrollState { offset_x: initial.max_offset_x, ..initial }));
+                    step(&mut app, 0.06, vec![]);
+                }
+                let y = initial.strip_rect.unwrap().center().y;
+                let (start_x, move_x, end_x) = if to_left { (310.0, 270.0, 90.0) } else { (50.0, 90.0, 270.0) };
+                let start = egui::pos2(start_x, y);
+                let last_move = egui::pos2(move_x, y);
+                let end = egui::pos2(end_x, y - 30.0);
+                let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+                let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+                step(&mut app, 0.10, vec![touch(egui::TouchPhase::Start, start), egui::Event::PointerMoved(start), button(start, true)]);
+                assert!(strip_touch_in_progress(&ctx), "active strip touch should defer the log");
+                step(&mut app, 0.12, vec![touch(egui::TouchPhase::Move, last_move), egui::Event::PointerMoved(last_move)]);
+                let before = ctx.data(|d| d.get_temp::<StripScrollState>(key)).unwrap();
+                assert!(before.dragging);
+                // The pointer button position is deliberately stale, as with egui-winit.
+                step(&mut app, 0.14, vec![touch(egui::TouchPhase::End, end), button(last_move, false), egui::Event::PointerGone]);
+                let after = ctx.data(|d| d.get_temp::<StripScrollState>(key)).unwrap();
+                let distance = if to_left { after.offset_x - before.offset_x } else { before.offset_x - after.offset_x };
+                assert!(distance > 150.0, "last contact position lost: {before:?} -> {after:?}");
+                assert!(!strip_touch_in_progress(&ctx), "log writes may resume after lift");
+            }
         }
     }
 
