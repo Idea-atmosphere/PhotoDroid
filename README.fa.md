@@ -2,6 +2,10 @@
 
 # PhotoDroid: PhotoCraft برای اندروید
 
+[![تعداد دانلود فایل‌های انتشار GitHub](https://img.shields.io/github/downloads/Idea-atmosphere/PhotoDroid/total?label=downloads)](https://github.com/Idea-atmosphere/PhotoDroid/releases)
+
+این شمارنده مجموع دانلود فایل‌های Release گیت‌هاب است، نه تعداد کاربران یا نصب‌ها؛ دانلود APK و ZIP جداگانه شمرده می‌شود.
+
 [English](README.md) | **فارسی**
 
 **PhotoDroid** ([`Idea-atmosphere/PhotoDroid`](https://github.com/Idea-atmosphere/PhotoDroid)) نسخه‌ی متن‌باز اندروید ویرایشگر تصویر و عکس دسکتاپ [PhotoCraft](https://github.com/storytold/photocraft) (ویرایشگر سازگار با Adobe Photoshop / فایل‌های PSD و PSB نوشته‌شده با Rust) است

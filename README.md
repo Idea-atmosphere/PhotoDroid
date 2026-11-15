@@ -1,5 +1,9 @@
 # PhotoDroid: PhotoCraft for Android
 
+[![GitHub release downloads](https://img.shields.io/github/downloads/Idea-atmosphere/PhotoDroid/total?label=downloads)](https://github.com/Idea-atmosphere/PhotoDroid/releases)
+
+The badge counts downloads of all GitHub Release assets, not unique users or installs. APK and ZIP downloads are counted separately.
+
 **English** | [فارسی](README.fa.md)
 
 **PhotoDroid** ([`Idea-atmosphere/PhotoDroid`](https://github.com/Idea-atmosphere/PhotoDroid)) is an open-source Android port of the desktop [PhotoCraft](https://github.com/storytold/photocraft) image and photo editor — a clean-room Adobe Photoshop (PSD/PSB) editor written in pure Rust

@@ -222,8 +222,10 @@ const LOG_SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 static LOG_WRITTEN: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 /// Whether the log may be written, given the time since its last write.
-fn log_save_due(since: Option<std::time::Duration>) -> bool {
-    since.is_none_or(|s| s >= LOG_SAVE_EVERY)
+fn log_save_due(since: Option<std::time::Duration>, touching_strip: bool) -> bool {
+    // Preserve crash recovery with a bounded delay: after at most four seconds, save even during
+    // continuous touch. Otherwise wait for the finger to lift, avoiding a synchronous I/O stall.
+    since.is_none_or(|s| s >= LOG_SAVE_EVERY && (!touching_strip || s >= LOG_SAVE_EVERY * 2))
 }
 
 /// Writes the log to `Download/PhotoCraft/log/photocraft-log.txt` shortly after it changes, so that a change's lines are in
@@ -234,9 +236,12 @@ pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) 
     }
     let mut written = LOG_WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
     let since = written.as_ref().map(|t| t.elapsed());
-    if !log_save_due(since) {
+    if !log_save_due(since, crate::mobile::strip_touch_in_progress(ctx)) {
         photocraft_doc::diag::mark_dirty();
-        ctx.request_repaint_after(LOG_SAVE_EVERY);
+        // Wait for the remaining regular interval; once due, check more often while a swipe is
+        // held so that a release flushes promptly. Do not wake ten times a second normally.
+        let remaining = since.map(|s| LOG_SAVE_EVERY.saturating_sub(s)).unwrap_or_default();
+        ctx.request_repaint_after(if remaining.is_zero() { std::time::Duration::from_millis(100) } else { remaining });
         return;
     }
     *written = Some(std::time::Instant::now());
@@ -331,9 +336,11 @@ mod diagnostic_log_tests {
 
     #[test]
     fn the_diagnostic_log_waits_between_its_saves() {
-        assert!(log_save_due(None), "the first save is due at once");
-        assert!(!log_save_due(Some(std::time::Duration::from_millis(300))), "a save just made is not due");
-        assert!(log_save_due(Some(std::time::Duration::from_secs(3))), "a save made long ago is due");
+        assert!(log_save_due(None, false), "the first save is due at once");
+        assert!(!log_save_due(Some(std::time::Duration::from_millis(300)), false), "a save just made is not due");
+        assert!(log_save_due(Some(std::time::Duration::from_secs(3)), false), "a save made long ago is due");
+        assert!(!log_save_due(Some(std::time::Duration::from_secs(3)), true), "defer a save during a swipe");
+        assert!(log_save_due(Some(std::time::Duration::from_secs(4)), true), "continuous touch cannot defer the crash log forever");
     }
 }
 
