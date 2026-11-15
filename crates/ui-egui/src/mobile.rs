@@ -460,6 +460,25 @@ struct StripScrollState {
     press_start_offset_x: f32,
     max_travel: f32,
     velocity_x: f32,
+    cadence: crate::swipe_cadence::SwipeCadence,
+}
+
+/// Count what reached the strip's UI pass, not hardware touch or display timings.
+fn observe_strip_cadence(ui: &egui::Ui, state: &mut StripScrollState) {
+    let (now, touches, pointers) = ui.input(|i| {
+        let mut touches: u32 = 0;
+        let mut pointers: u32 = 0;
+        for event in &i.raw.events {
+            match event {
+                egui::Event::Touch { device_id, id, phase: egui::TouchPhase::Move, .. }
+                    if state.active_touch == Some((*device_id, *id)) => touches = touches.saturating_add(1),
+                egui::Event::PointerMoved(_) => pointers = pointers.saturating_add(1),
+                _ => {}
+            }
+        }
+        (i.time, touches, pointers)
+    });
+    state.cadence.observe(now, touches, pointers);
 }
 
 /// A finger is down on either phone strip. Periodic diagnostic saves can defer briefly so their
@@ -553,6 +572,10 @@ fn begin_strip_scroll(
     };
     let new_press = any_pressed || same_frame_restart || (any_down && (!state.pointer_in_strip || origin_changed));
 
+    if diag_on && state.pointer_in_strip && !new_press {
+        observe_strip_cadence(ui, &mut state);
+    }
+
     if !any_down || (any_released && !any_pressed && !same_frame_restart) {
         if state.pointer_in_strip {
             // Android's final Touch::End can be newer than the last emulated PointerMoved. Do
@@ -580,6 +603,10 @@ fn begin_strip_scroll(
                 photocraft_doc::diag::note(move || {
                     format!("{label} scroll touch released: offset_x={off:.1}/{max_off:.1} max_travel={travel:.1} coast_vel={vel:.1}")
                 });
+                if state.dragging {
+                    let cadence = state.cadence;
+                    photocraft_doc::diag::note(move || format!("{label} {}", cadence.summary()));
+                }
             }
             state.pointer_in_strip = false;
             state.dragging = false;
@@ -621,7 +648,9 @@ fn begin_strip_scroll(
             state.press_start_offset_x = state.offset_x;
             state.max_travel = 0.0;
             state.velocity_x = 0.0;
+            state.cadence = crate::swipe_cadence::SwipeCadence::default();
             if diag_on {
+                observe_strip_cadence(ui, &mut state);
                 let off = state.offset_x;
                 let max_off = state.max_offset_x;
                 photocraft_doc::diag::note(move || {
