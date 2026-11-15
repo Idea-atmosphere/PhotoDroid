@@ -539,7 +539,8 @@ fn phone_thumbnail_double_tap(ctx: &egui::Context, rc: &RowCtx<'_>) -> bool {
     if !matches!(rc.l.content, LayerContent::Text(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) | LayerContent::Smart(_)) {
         return false;
     }
-    let key = rc.resp.id.with(("phone-thumbnail-tap", rc.doc.id.0, rc.l.id.0));
+    // The row widget ID may change after selecting a different layer; the document and layer IDs do not.
+    let key = egui::Id::new(("phone-thumbnail-tap", rc.doc.id.0, rc.l.id.0));
     let (time, press, ended, cancelled, modified) = ctx.input(|i| {
         let press = i.events.iter().find_map(|e| match e {
             egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
