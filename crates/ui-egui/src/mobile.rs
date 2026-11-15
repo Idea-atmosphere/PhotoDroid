@@ -1693,13 +1693,11 @@ mod tests {
     fn phone_tap(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, at: egui::Pos2, id: u64) {
         let event = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: at, force: None };
         let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-        h.event(event(egui::TouchPhase::Start));
-        h.event(egui::Event::PointerMoved(at));
-        h.event(button(true));
+        // egui-winit puts a touch and its emulated pointer event in the same RawInput.
+        // Harness::event would instead run a separate frame for each queued event.
+        h.input_mut().events.extend([event(egui::TouchPhase::Start), egui::Event::PointerMoved(at), button(true)]);
         h.step();
-        h.event(event(egui::TouchPhase::End));
-        h.event(button(false));
-        h.event(egui::Event::PointerGone);
+        h.input_mut().events.extend([event(egui::TouchPhase::End), button(false), egui::Event::PointerGone]);
         h.step();
     }
 
