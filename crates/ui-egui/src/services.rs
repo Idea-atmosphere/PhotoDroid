@@ -465,6 +465,9 @@ pub struct Services {
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
+    /// Enqueue a periodic diagnostic save. Success means queued, not persisted; the platform
+    /// reports failures and retries. Explicit Save Diagnostic Log still uses `write`.
+    pub queue_diagnostic_log: Option<Box<dyn FnMut() -> Result<(), String>>>,
     /// Size and modification time of a file (native); `None` on the web, where Save never
     /// writes back to a file.
     pub file_stamp: Option<FileStampFn>,

@@ -88,6 +88,7 @@ pub struct Link {
     save_targets: Arc<Mutex<HashMap<String, String>>>,
     /// The transparent Android IME view is active, so its event queue needs regular frames.
     keyboard: Arc<AtomicBool>,
+    diagnostic_worker: Arc<Mutex<Option<crate::diagnostic_worker::Worker>>>,
     ctx: egui::Context,
 }
 
@@ -100,6 +101,7 @@ impl Link {
             pending_save: Arc::default(),
             save_targets: Arc::default(),
             keyboard: Arc::default(),
+            diagnostic_worker: Arc::default(),
             ctx,
         }
     }
@@ -107,6 +109,12 @@ impl Link {
     pub fn notify(&self, error: bool, text: impl Into<String>) {
         locked(&self.messages).push(Message { error, text: text.into() });
         self.ctx.request_repaint();
+    }
+
+    /// Drain the writer before the Android activity and its JNI reference go away.
+    pub fn stop_diagnostic_worker(&self) {
+        let worker = locked(&self.diagnostic_worker).take();
+        drop(worker);
     }
 
     /// A file has been read: it goes to the UI's inbox.
@@ -209,8 +217,48 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
     let (autosave_store, results_store, flush_store, discard_store, adopt_store) =
         (store.clone(), store.clone(), store.clone(), store.clone(), store);
     let recovery_dir = dirs.recovery();
-    let saver = Rc::new(Saver::new(dirs.staging(), dirs.export_index(), link.save_targets()));
+    // Serialize log writes, exports and log deletion, including the shared MediaStore URI index.
+    let saver = Arc::new(Mutex::new(Saver::new(dirs.staging(), dirs.export_index(), link.save_targets())));
     let saver_for_debug = saver.clone();
+    let worker_saver = saver.clone();
+    let generation = Arc::new(AtomicU64::new(0));
+    let worker_generation = generation.clone();
+    let enqueue_generation = generation.clone();
+    let manual_generation = generation.clone();
+    let worker_ctx = link.ctx.clone();
+    let worker = crate::diagnostic_worker::Worker::new(move |snapshot| {
+        let text = photocraft_doc::diag::dump();
+        let lines = text.lines().count();
+        let began = std::time::Instant::now();
+        let saver = locked(&worker_saver);
+        if !crate::diagnostic_worker::snapshot_is_current(&snapshot, worker_generation.load(Ordering::SeqCst), photocraft_doc::diag::enabled()) {
+            return;
+        }
+        crate::crash_report::keep_copy(text.as_bytes());
+        match saver.save_log(crate::crash_report::LOG_NAME, text.as_bytes()) {
+            Ok(()) => photocraft_doc::diag::note_quiet(move || format!("log saved: {lines} lines in {} ms (background)", began.elapsed().as_millis())),
+            Err(e) => {
+                log::warn!("the background diagnostic log could not be saved: {e}");
+                photocraft_doc::diag::mark_dirty();
+                worker_ctx.request_repaint();
+            }
+        }
+    });
+    let queue_diagnostic_log: Option<Box<dyn FnMut() -> Result<(), String>>> = match worker {
+        Ok(worker) => {
+            *locked(&link.diagnostic_worker) = Some(worker);
+            let slot = link.diagnostic_worker.clone();
+            Some(Box::new(move || {
+                let slot = locked(&slot);
+                let worker = slot.as_ref().ok_or("diagnostic writer stopped")?;
+                worker.enqueue(enqueue_generation.load(Ordering::SeqCst)).map_err(str::to_string)
+            }))
+        }
+        Err(e) => {
+            log::warn!("could not start background diagnostic writer: {e}");
+            None
+        }
+    };
     let (debug_root, cpu_root) = (dirs.root().to_path_buf(), dirs.root().to_path_buf());
     let (prefs_load, prefs_save) = (dirs.preferences(), dirs.preferences());
     let keyboard_link = link.clone();
@@ -227,19 +275,27 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
             if is_diagnostic_log(&name) {
                 // Keep a second private copy for an unclean shutdown; publish the readable log in
                 // Download/PhotoCraft/log without sending ordinary .txt exports there.
+                // An older queued snapshot must not overwrite an explicit save.
+                if name == crate::crash_report::LOG_NAME {
+                    manual_generation.fetch_add(1, Ordering::SeqCst);
+                }
+                let saver = locked(&saver);
                 if name == crate::crash_report::LOG_NAME && photocraft_doc::diag::enabled() {
                     crate::crash_report::keep_copy(bytes);
                 }
                 return saver.save_log(&name, bytes);
             }
-            saver.save(path, bytes)
+            locked(&saver).save(path, bytes)
         })),
+        queue_diagnostic_log,
         set_debug_log: Some(Box::new(move |enabled: bool| {
+            generation.fetch_add(1, Ordering::SeqCst);
+            let saver = locked(&saver_for_debug);
             crate::crash_report::set_debug_enabled(&debug_root, enabled);
             if !enabled {
                 // Remove logs in Download/PhotoCraft/log and logs written by older versions into
                 // the export folder itself.
-                saver_for_debug.remove_logs()?;
+                saver.remove_logs()?;
             }
             Ok(())
         })),

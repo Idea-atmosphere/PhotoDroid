@@ -236,7 +236,9 @@ pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) 
     }
     let mut written = LOG_WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
     let since = written.as_ref().map(|t| t.elapsed());
-    if !log_save_due(since, crate::mobile::strip_touch_in_progress(ctx)) {
+    // The Android worker does not block a gesture; synchronous platforms still defer briefly.
+    let queued = app.services.queue_diagnostic_log.is_some();
+    if !log_save_due(since, !queued && crate::mobile::strip_touch_in_progress(ctx)) {
         photocraft_doc::diag::mark_dirty();
         // Wait for the remaining regular interval; once due, check more often while a swipe is
         // held so that a release flushes promptly. Do not wake ten times a second normally.
@@ -246,8 +248,15 @@ pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) 
     }
     *written = Some(std::time::Instant::now());
     drop(written);
-    // The save runs on the UI thread, so its time is in the frame timing too. The line says how long it took, but
-    // does not make the log due again (see `diag::note_quiet`).
+    if let Some(queue) = app.services.queue_diagnostic_log.as_mut() {
+        if let Err(e) = queue() {
+            photocraft_doc::diag::mark_dirty();
+            ctx.request_repaint_after(LOG_SAVE_EVERY);
+            log::warn!("the diagnostic log could not be queued: {e}");
+        }
+        return;
+    }
+    // The fallback writer is synchronous; do not make another save due when recording its cost.
     let began = std::time::Instant::now();
     match write_diagnostic_log(app) {
         Ok(lines) => photocraft_doc::diag::note_quiet(move || format!("log saved: {lines} lines in {} ms", began.elapsed().as_millis())),

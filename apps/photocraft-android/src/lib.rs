@@ -17,6 +17,7 @@
 
 pub mod crash_guard;
 pub mod crash_report;
+mod diagnostic_worker;
 pub mod intake;
 pub mod perf_log;
 pub mod protocol;
