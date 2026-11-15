@@ -1709,7 +1709,13 @@ mod tests {
             let (mut h, id) = phone_layer_harness(size, false);
             let thumb = phone_layer_row(&h, id).thumbnail.unwrap();
             phone_tap(&mut h, thumb.center() - vec2(4.0, 0.0), 1);
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(photocraft_doc::LayerId(id)), "first tap selects the text layer");
+            let doc_id = h.state().session.active().unwrap().doc.id.0;
+            let key = egui::Id::new(("phone-thumbnail-tap", doc_id, id));
+            assert!(h.ctx.data(|d| d.get_temp::<f64>(key)).is_some(), "first tap is recorded");
             h.run_steps(20); // 0.33 s: longer than egui's mouse double-click threshold.
+            assert!(h.ctx.data(|d| d.get_temp::<f64>(key)).is_some(), "first tap remains recorded after selection");
+            assert_eq!(phone_layer_row(&h, id).thumbnail.unwrap(), thumb, "thumbnail remains under the finger");
             phone_tap(&mut h, thumb.center() + vec2(4.0, 0.0), 2);
             h.run_steps(3);
             assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(id), "text thumbnail at {size:?}");
