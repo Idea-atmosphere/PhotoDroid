@@ -481,12 +481,12 @@ fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, 
 
 /// A plain click on the row: select the layer and retarget pixels / mask / vector mask.
 fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, actions: &mut Vec<(String, Value)>) {
-    let (l, doc, resp, masks, row, ts, thumb) = (rc.l, rc.doc, rc.resp, rc.masks, rc.row, rc.ts, rc.thumb);
+    let (l, doc, resp, masks, row, ts, thumb, rect) = (rc.l, rc.doc, rc.resp, rc.masks, rc.row, rc.ts, rc.thumb, rc.rect);
     let ctx = ui.ctx();
     let mask_rect = masks.thumb(crate::mask_thumbs_ui::MaskKind::Pixel);
     let m = ui.input(|i| i.modifiers);
     let pos = resp.interact_pointer_pos();
-    let on_thumb = ts > 0.0 && pos.is_some_and(|p| thumb.expand(2.0).contains(p));
+    let on_thumb = ts > 0.0 && pos.is_some_and(|p| thumbnail_hit(ctx, rect, thumb, p));
     // ⌘-click on the Background thumbnail stands in for the plain click (there is no
     // transparency to load): it selects the Background alone, not toggled into the set.
     let mode = if m.command && on_thumb && doc.is_background(l.id) { "replace" } else { select_mode(m) };
@@ -523,6 +523,51 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
     }
 }
 
+/// On a phone the small thumbnail's vertical padding belongs to its column, not to Layer Style.
+/// Keep the horizontal bounds strict so the eye, mask, chain and name remain separate targets.
+fn thumbnail_hit(ctx: &egui::Context, row: Rect, thumb: Rect, pos: Pos2) -> bool {
+    thumb.expand(2.0).contains(pos) || (crate::mobile::touch_screen(ctx) && Rect::from_x_y_ranges(thumb.x_range(), row.y_range()).contains(pos))
+}
+
+/// Accept two valid phone taps on the *same thumbnail* within half a second. egui's mouse-oriented
+/// double-click limit (0.3 s and 6 points) can miss two natural finger taps. Keep a separate key
+/// per document and row, and forget the first tap on an intervening press elsewhere or cancellation.
+fn phone_thumbnail_double_tap(ctx: &egui::Context, rc: &RowCtx<'_>) -> bool {
+    if !crate::mobile::touch_screen(ctx) || rc.ts <= 0.0 || rc.l.frame.is_some() {
+        return false;
+    }
+    if !matches!(rc.l.content, LayerContent::Text(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) | LayerContent::Smart(_)) {
+        return false;
+    }
+    let key = rc.resp.id.with(("phone-thumbnail-tap", rc.doc.id.0, rc.l.id.0));
+    let (time, press, ended, cancelled, modified) = ctx.input(|i| {
+        let press = i.events.iter().find_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+            _ => None,
+        });
+        let ended = i.events.iter().any(|e| matches!(e, egui::Event::Touch { phase: egui::TouchPhase::End, .. }));
+        let cancelled = i.events.iter().any(|e| matches!(e, egui::Event::Touch { phase: egui::TouchPhase::Cancel, .. }));
+        (i.time, press, ended, cancelled, i.modifiers != egui::Modifiers::NONE)
+    });
+    if cancelled || modified || press.is_some_and(|p| !thumbnail_hit(ctx, rc.rect, rc.thumb, p) || rc.masks.hit(p).is_some()) {
+        ctx.data_mut(|d| d.remove::<f64>(key));
+    }
+    let on_thumb = rc.resp.interact_pointer_pos().is_some_and(|p| thumbnail_hit(ctx, rc.rect, rc.thumb, p) && rc.masks.hit(p).is_none());
+    if !ended || !rc.resp.clicked() || !on_thumb || modified || cancelled {
+        return false;
+    }
+    let previous = ctx.data(|d| d.get_temp::<f64>(key));
+    let double = previous.is_some_and(|t| time >= t && time - t < 0.5);
+    ctx.data_mut(|d| {
+        if double {
+            d.remove::<f64>(key);
+        } else {
+            d.insert_temp(key, time);
+        }
+    });
+    double
+}
+
 /// Double-click: rename, un-background, open the thumbnail's settings or the row's Layer Style.
 fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &RowCtx<'_>, name_rect: Option<Rect>, actions: &mut Vec<(String, Value)>) {
     let (l, doc, resp, masks, ts, thumb, rect) = (rc.l, rc.doc, rc.resp, rc.masks, rc.ts, rc.thumb, rc.rect);
@@ -535,7 +580,8 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
         // One rename at a time: starting this one commits any other (#314).
         actions.push(done);
     }
-    if resp.double_clicked() && l.frame.is_none() {
+    let phone_thumb_double = phone_thumbnail_double_tap(ctx, rc);
+    if (resp.double_clicked() || phone_thumb_double) && l.frame.is_none() {
         let pos = resp.interact_pointer_pos();
         let on = |r: Rect| pos.is_some_and(|p| r.expand(2.0).contains(p));
         if crate::doc_props_ui::is_background(doc, l) {
@@ -558,10 +604,11 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
                 actions.push(("ui.properties".into(), json!(true)));
             }
         } else if pos.and_then(|p| masks.hit(p)).is_none() {
+            let on_thumb = ts > 0.0 && pos.is_some_and(|p| thumbnail_hit(ctx, rect, thumb, p));
             let id = match &l.content {
-                LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) if ts > 0.0 && on(thumb) => "layer.layerContentOptions",
-                LayerContent::Smart(_) if ts > 0.0 && on(thumb) => "layer.smartObjects.editContents",
-                LayerContent::Text(_) if ts > 0.0 && on(thumb) => "type.editText",
+                LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) if on_thumb => "layer.layerContentOptions",
+                LayerContent::Smart(_) if on_thumb => "layer.smartObjects.editContents",
+                LayerContent::Text(_) if on_thumb => "type.editText",
                 _ => "layer.layerStyle.blendingOptions",
             };
             if crate::menus::is_enabled(app, id) {
