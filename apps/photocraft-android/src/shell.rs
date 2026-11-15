@@ -150,7 +150,7 @@ fn record_panic(message: &str) {
         return;
     }
     if let Some(text) = diag::record_panic(message) {
-        crash_report::keep_copy(text.as_bytes());
+        crash_report::keep_panic_copy(text.as_bytes());
     }
 }
 
@@ -181,6 +181,7 @@ impl Drop for AndroidShell {
     /// not run Drop, which is why revisions are also queued continuously while editing.
     fn drop(&mut self) {
         self.flush_recovery();
+        self.link.stop_diagnostic_worker();
         crash_report::finish(&self.root);
     }
 }
