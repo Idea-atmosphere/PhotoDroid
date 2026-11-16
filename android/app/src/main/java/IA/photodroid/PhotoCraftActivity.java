@@ -146,6 +146,7 @@ public class PhotoCraftActivity extends NativeActivity {
             updateSystemGestureExclusion(v);
         });
         decorView.post(() -> {
+            PointerInputDispatch.request(decorView);
             decorView.requestApplyInsets();
             refreshInsets();
             updateSystemGestureExclusion(decorView);
@@ -176,6 +177,7 @@ public class PhotoCraftActivity extends NativeActivity {
         if (window != null) {
             View decorView = window.getDecorView();
             decorView.post(() -> {
+                PointerInputDispatch.request(decorView);
                 decorView.requestApplyInsets();
                 refreshInsets();
                 updateSystemGestureExclusion(decorView);
@@ -190,7 +192,9 @@ public class PhotoCraftActivity extends NativeActivity {
             refreshInsets();
             Window window = getWindow();
             if (window != null) {
-                updateSystemGestureExclusion(window.getDecorView());
+                View decorView = window.getDecorView();
+                PointerInputDispatch.request(decorView);
+                updateSystemGestureExclusion(decorView);
             }
         }
     }
