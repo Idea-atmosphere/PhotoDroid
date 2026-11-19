@@ -142,7 +142,7 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Bottom panels stack upwards in the order they are added: the virtual keyboard (when it is on)
     // sits at the foot of the screen, the tool strip above it, the options above that, and the sheet
     // above those. The keys are drawn again above a dialog or the menu, which dim the screen.
-    let covered = !app.ui.dialogs.is_empty() || is_set(ui.ctx(), menu_open_id());
+    let covered = !app.ui.dialogs.is_empty() || is_set(ui.ctx(), menu_open_id()) || is_set(ui.ctx(), donate_open_id());
     app.virtual_mouse.set_covered(covered);
     virtual_input::panel(app, ui, covered);
     if is_set(ui.ctx(), tool_strip_hidden_id()) {
@@ -168,6 +168,7 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         mouse_bar(app, ui.ctx());
     }
     menu(app, ui.ctx());
+    donate_dialog(app, ui.ctx());
     app.virtual_mouse.overlay(ui.ctx());
 }
 
@@ -336,6 +337,21 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         app.virtual_input.set_system_keyboard_disabled(!system_keyboard);
                         ctx.request_repaint();
                     }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.add_sized(vec2(100.0, TOUCH), egui::Button::new(tl!("Donate"))).clicked() {
+                            set_flag(&ctx, donate_open_id(), true);
+                            ctx.data_mut(|d| d.remove::<String>(donate_status_id()));
+                            egui::Popup::close_all(&ctx);
+                        }
+                        // Animate only while the settings popup is visible.
+                        let time = ctx.input(|i| i.time);
+                        let beat = ((time * std::f64::consts::TAU / 1.25).sin() * 0.5 + 0.5) as f32;
+                        let size = 15.0 + 4.0 * beat;
+                        let (rect, _) = ui.allocate_exact_size(vec2(24.0, TOUCH), Sense::hover());
+                        icons::paint(ui, rect, "donate-heart", size, egui::Color32::from_rgb(235, 73, 103));
+                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                    });
                 });
                 let _ = ui.add_enabled_ui(can_undo, |ui| {
                     if icons::button(ui, "undo-2", button_size, false, tl!("Undo")).clicked() {
@@ -378,6 +394,93 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if let Some(id) = run {
         let _ = app.run(id, json!({}));
+    }
+}
+
+/// Each donation entry is independent, so more networks or addresses can be added later.
+struct DonationAddress {
+    label: &'static str,
+    network: &'static str,
+    address: &'static str,
+}
+
+const DONATION_ADDRESSES: &[DonationAddress] = &[DonationAddress {
+    label: "Gram (TON)",
+    network: "TON network",
+    address: "UQDivGkSK4EpCBz3Vzs2fDqH8P4Kz2jr9XugYpeqzPrHaHUP",
+}];
+
+fn donate_open_id() -> egui::Id {
+    egui::Id::unique("phone-donate-open")
+}
+
+fn donate_status_id() -> egui::Id {
+    egui::Id::unique("phone-donate-copy-status")
+}
+
+/// Copy the exact address, never the visually wrapped representation.
+fn copy_donation_address(app: &PhotocraftApp, ctx: &egui::Context, address: &str) -> Result<(), String> {
+    if let Some(copy) = app.services.copy_text.as_ref() {
+        copy(address)
+    } else {
+        ctx.copy_text(address.to_owned());
+        Ok(())
+    }
+}
+
+fn donate_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !is_set(ctx, donate_open_id()) {
+        return;
+    }
+    let mut close = false;
+    let mut copied: Option<Result<(), String>> = None;
+    let t = Tokens::get(ctx);
+    let modal = egui::Modal::new(egui::Id::unique("phone-donate-dialog")).show(ctx, |ui| {
+        let width = (ctx.content_rect().width() - 48.0).clamp(120.0, 340.0);
+        ui.set_width(width);
+        ui.horizontal(|ui| {
+            ui.heading(tl!("Donate"));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if icons::button(ui, "x", TOUCH, false, tl!("Close")).clicked() {
+                    close = true;
+                }
+            });
+        });
+        ui.separator();
+        egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 140.0).max(90.0)).show(ui, |ui| {
+            for entry in DONATION_ADDRESSES {
+                ui.group(|ui| {
+                    ui.set_width((width - 20.0).max(80.0));
+                    ui.label(RichText::new(entry.label).font(theme::semibold(16.0)).color(t.text));
+                    ui.label(entry.network);
+                    ui.add_space(5.0);
+                    // Wallet addresses are ASCII; line-break the display only, never the copied value.
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        for chunk in entry.address.as_bytes().chunks(16) {
+                            if let Ok(line) = std::str::from_utf8(chunk) {
+                                ui.label(RichText::new(line).monospace().size(13.0));
+                            }
+                        }
+                    });
+                    ui.add_space(5.0);
+                    if ui.add_sized(vec2(150.0, TOUCH), egui::Button::new(tl!("Copy address"))).clicked() {
+                        copied = Some(copy_donation_address(app, ctx, entry.address));
+                    }
+                });
+                ui.add_space(8.0);
+            }
+            if let Some(status) = ctx.data(|d| d.get_temp::<String>(donate_status_id())) {
+                ui.label(status);
+            }
+        });
+    });
+    if let Some(result) = copied {
+        let message = if result.is_ok() { tl!("Address copied") } else { tl!("Could not copy address") };
+        ctx.data_mut(|d| d.insert_temp(donate_status_id(), message.to_owned()));
+        ctx.request_repaint();
+    }
+    if close || modal.should_close() {
+        set_flag(ctx, donate_open_id(), false);
     }
 }
 
@@ -1689,6 +1792,58 @@ mod tests {
         h.get_by_label("System keyboard").click();
         h.run_steps(2);
         assert!(!h.state().virtual_input.system_keyboard_disabled());
+    }
+
+    #[test]
+    fn donate_from_settings_copies_the_exact_address_and_keeps_keyboard_setting() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        use std::sync::{Arc, Mutex};
+        let copied = Arc::new(Mutex::new(String::new()));
+        let sink = Arc::clone(&copied);
+        let services = crate::Services {
+            copy_text: Some(Box::new(move |value| {
+                *sink.lock().unwrap() = value.to_owned();
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut h = Harness::builder().with_size(vec2(411.0, 800.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) {
+                    top_bar(app, ui);
+                    donate_dialog(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("Phone settings").click();
+        h.run_steps(2);
+        assert!(h.query_by_label("System keyboard").is_some());
+        h.get_by_label("Donate").click();
+        h.run_steps(3);
+        assert!(is_set(&h.ctx, donate_open_id()));
+        assert!(h.query_by_label("Gram (TON)").is_some());
+        assert!(h.query_by_label("TON network").is_some());
+        h.get_by_label("Copy address").click();
+        h.run_steps(2);
+        assert_eq!(*copied.lock().unwrap(), "UQDivGkSK4EpCBz3Vzs2fDqH8P4Kz2jr9XugYpeqzPrHaHUP");
+        assert!(h.query_by_label("Address copied").is_some());
+        assert!(!h.state().virtual_input.system_keyboard_disabled());
+        h.get_by_label("Close").click();
+        h.run_steps(2);
+        assert!(!is_set(&h.ctx, donate_open_id()));
+    }
+
+    #[test]
+    fn donation_copy_reports_platform_failure() {
+        let app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services { copy_text: Some(Box::new(|_| Err("clipboard unavailable".into()))), ..Default::default() },
+        );
+        assert!(copy_donation_address(&app, &egui::Context::default(), DONATION_ADDRESSES[0].address).is_err());
     }
 
     /// Exercise the real phone sheet and a selected text layer, in both orientations. The
