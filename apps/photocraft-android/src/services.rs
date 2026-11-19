@@ -305,6 +305,10 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
         })),
         encode_png: Some(Box::new(encode_png)),
         open_url: Some(Box::new(open_url)),
+        copy_text: Some(Box::new(|text| {
+            let reply = platform::call("copy_text", text)?;
+            protocol::parse_reply(&reply).map(|_| ())
+        })),
         // The activity makes the request explicit (see `softKeyboard` there); a failed request
         // leaves the keyboard as it is.
         soft_keyboard: Some(Box::new(move |show: bool| {

@@ -2,6 +2,8 @@ package IA.photodroid;
 
 import android.app.Dialog;
 import android.app.NativeActivity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -531,6 +533,12 @@ public class PhotoCraftActivity extends NativeActivity {
                     return ok(deleteLogs(argument));
                 case "url":
                     return openUrl(argument);
+                case "copy_text": {
+                    ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard == null) return err("Clipboard unavailable");
+                    clipboard.setPrimaryClip(ClipData.newPlainText("PhotoDroid", argument));
+                    return ok("");
+                }
                 case "keyboard":
                     softKeyboard("show".equals(argument));
                     return ok("");
