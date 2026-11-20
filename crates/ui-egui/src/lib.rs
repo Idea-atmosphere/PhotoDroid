@@ -30,6 +30,7 @@ pub mod canvas;
 pub mod control;
 pub mod dialogs;
 pub mod dock;
+mod donate_button;
 pub(crate) mod edit_session;
 pub mod file_dialog;
 pub mod file_open;
