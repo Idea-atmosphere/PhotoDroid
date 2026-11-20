@@ -338,22 +338,11 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ctx.request_repaint();
                     }
                     ui.separator();
-                    // Animate only while the settings popup is visible. Both the label and
-                    // the heart are inside one blue, touch-sized pill and share its click target.
-                    let time = ctx.input(|i| i.time);
-                    let beat = ((time * std::f64::consts::TAU / 1.25).sin() * 0.5 + 0.5) as f32;
-                    let heart = icons::image("donate-heart", 15.0 + 4.0 * beat, egui::Color32::from_rgb(235, 73, 103));
-                    let donate = egui::Button::new(tl!("Donate"))
-                        .right_text(heart)
-                        .min_size(vec2(136.0, TOUCH))
-                        .corner_radius(22)
-                        .stroke(Stroke::new(1.5, egui::Color32::from_rgb(55, 145, 245)));
-                    if ui.add(donate).clicked() {
+                    if crate::donate_button::button(ui).clicked() {
                         set_flag(&ctx, donate_open_id(), true);
-                        ctx.data_mut(|d| d.remove::<String>(donate_status_id()));
+                        ctx.data_mut(|d| d.remove::<(usize, bool, f64)>(donate_status_id()));
                         egui::Popup::close_all(&ctx);
                     }
-                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
                 });
                 let _ = ui.add_enabled_ui(can_undo, |ui| {
                     if icons::button(ui, "undo-2", button_size, false, tl!("Undo")).clicked() {
@@ -430,55 +419,154 @@ fn copy_donation_address(app: &PhotocraftApp, ctx: &egui::Context, address: &str
     }
 }
 
+/// The copy action is one real button (including accessibility and keyboard focus).
+fn donate_copy_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let width = ui.available_width().max(80.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, TOUCH), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    let fill = if response.hovered() || response.is_pointer_button_down_on() {
+        egui::Color32::from_rgb(25, 34, 52)
+    } else {
+        egui::Color32::from_rgb(18, 23, 35)
+    };
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(22), fill);
+    crate::donate_button::paint_three_color_ring(ui.painter(), rect, true);
+    if response.has_focus() {
+        ui.painter().rect_stroke(rect.expand(2.0), egui::CornerRadius::same(24), Stroke::new(1.5, egui::Color32::WHITE), egui::StrokeKind::Outside);
+    }
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, theme::semibold(14.0), egui::Color32::from_rgb(248, 250, 252));
+    response
+}
+
+/// Blue-to-purple header strip, with a compact network badge on small screens.
+fn donate_card_header(ui: &mut egui::Ui, entry: &DonationAddress) {
+    let width = ui.available_width().max(80.0);
+    let narrow = width < 220.0;
+    let height = if narrow { 63.0 } else { 38.0 };
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let mut gradient = egui::Mesh::default();
+    let left = egui::Color32::from_rgb(18, 38, 55);
+    let right = egui::Color32::from_rgb(35, 26, 52);
+    gradient.colored_vertex(rect.left_top(), left);
+    gradient.colored_vertex(rect.right_top(), right);
+    gradient.colored_vertex(rect.right_bottom(), right);
+    gradient.colored_vertex(rect.left_bottom(), left);
+    gradient.add_triangle(0, 1, 2);
+    gradient.add_triangle(0, 2, 3);
+    ui.painter().add(egui::Shape::mesh(gradient));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 4.0))));
+    let tag = |ui: &mut egui::Ui| {
+        Frame::NONE
+            .fill(egui::Color32::from_rgb(49, 23, 43))
+            .corner_radius(egui::CornerRadius::same(99))
+            .stroke(Stroke::new(1.0, egui::Color32::from_rgb(134, 49, 99)))
+            .inner_margin(Margin::symmetric(9, 3))
+            .show(ui, |ui| {
+                ui.label(RichText::new(entry.network).size(11.5).color(egui::Color32::from_rgb(244, 114, 182)));
+            });
+    };
+    if narrow {
+        child.label(RichText::new(entry.label).font(theme::semibold(16.0)).color(egui::Color32::WHITE));
+        tag(&mut child);
+    } else {
+        child.horizontal_centered(|ui| {
+            ui.label(RichText::new(entry.label).font(theme::semibold(16.0)).color(egui::Color32::WHITE));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| tag(ui));
+        });
+    }
+}
+
 fn donate_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !is_set(ctx, donate_open_id()) {
         return;
     }
     let mut close = false;
-    let mut copied: Option<Result<(), String>> = None;
-    let t = Tokens::get(ctx);
-    let modal = egui::Modal::new(egui::Id::unique("phone-donate-dialog")).show(ctx, |ui| {
-        let width = (ctx.content_rect().width() - 48.0).clamp(120.0, 340.0);
+    let mut copied: Option<(usize, bool)> = None;
+    let now = ctx.input(|i| i.time);
+    let status = ctx.data(|d| d.get_temp::<(usize, bool, f64)>(donate_status_id()));
+    let frame = Frame::NONE
+        .fill(egui::Color32::from_rgb(17, 22, 35))
+        .corner_radius(egui::CornerRadius::same(22))
+        .stroke(Stroke::new(1.0, egui::Color32::from_rgb(100, 71, 159)))
+        .inner_margin(Margin::same(16));
+    let modal = egui::Modal::new(egui::Id::unique("phone-donate-dialog")).frame(frame).show(ctx, |ui| {
+        let width = (ctx.content_rect().width() - 64.0).clamp(120.0, 340.0);
         ui.set_width(width);
         ui.horizontal(|ui| {
-            ui.heading(tl!("Donate"));
+            Frame::NONE
+                .fill(egui::Color32::from_rgb(15, 23, 42))
+                .corner_radius(egui::CornerRadius::same(99))
+                .stroke(Stroke::new(1.0, egui::Color32::from_rgb(100, 55, 145)))
+                .inner_margin(Margin::symmetric(12, 6))
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(vec2(18.0, 20.0), Sense::hover());
+                        let animate = ui.style().animation_time > 0.0;
+                        let scale = if animate { crate::donate_button::heartbeat(now) } else { 1.0 };
+                        crate::donate_button::paint_heart(ui.painter(), rect.center(), 16.0 * scale);
+                        if animate { ctx.request_repaint_after(std::time::Duration::from_millis(50)); }
+                        ui.label(RichText::new(tl!("Donate")).font(theme::semibold(16.0)).color(egui::Color32::WHITE));
+                    });
+                });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icons::button(ui, "x", TOUCH, false, tl!("Close")).clicked() {
-                    close = true;
-                }
+                if icons::button(ui, "x", TOUCH, false, tl!("Close")).clicked() { close = true; }
             });
         });
+        ui.add_space(6.0);
         ui.separator();
-        egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 140.0).max(90.0)).show(ui, |ui| {
-            for entry in DONATION_ADDRESSES {
-                ui.group(|ui| {
-                    ui.set_width((width - 20.0).max(80.0));
-                    ui.label(RichText::new(entry.label).font(theme::semibold(16.0)).color(t.text));
-                    ui.label(entry.network);
-                    ui.add_space(5.0);
-                    // Wallet addresses are ASCII; line-break the display only, never the copied value.
-                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                        for chunk in entry.address.as_bytes().chunks(16) {
-                            if let Ok(line) = std::str::from_utf8(chunk) {
-                                ui.label(RichText::new(line).monospace().size(13.0));
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical().id_salt("donate-cards").max_height((ctx.content_rect().height() - 140.0).max(90.0)).show(ui, |ui| {
+            for (index, entry) in DONATION_ADDRESSES.iter().enumerate() {
+                ui.push_id(index, |ui| {
+                    Frame::NONE
+                        .fill(egui::Color32::from_rgb(13, 18, 30))
+                        .corner_radius(egui::CornerRadius::same(16))
+                        .stroke(Stroke::new(1.0, egui::Color32::from_rgb(43, 57, 84)))
+                        .inner_margin(Margin::same(12))
+                        .show(ui, |ui| {
+                            ui.set_width((width - 24.0).max(80.0));
+                            donate_card_header(ui, entry);
+                            ui.add_space(10.0);
+                            ui.label(RichText::new(tl!("Wallet address")).size(11.0).color(egui::Color32::from_rgb(148, 163, 184)));
+                            ui.add_space(4.0);
+                            Frame::NONE
+                                .fill(egui::Color32::from_rgb(8, 11, 18))
+                                .corner_radius(egui::CornerRadius::same(8))
+                                .stroke(Stroke::new(1.0, egui::Color32::from_rgb(33, 91, 116)))
+                                .inner_margin(Margin::same(9))
+                                .show(ui, |ui| {
+                                    ui.set_width((width - 46.0).max(65.0));
+                                    // Wallet addresses are ASCII; wrap display only, never the copied value.
+                                    let chunk_len = ((ui.available_width() / 7.5).floor() as usize).clamp(8, 16);
+                                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                                        for chunk in entry.address.as_bytes().chunks(chunk_len) {
+                                            if let Ok(line) = std::str::from_utf8(chunk) {
+                                                ui.label(RichText::new(line).monospace().size(12.0).color(egui::Color32::from_rgb(56, 189, 248)));
+                                            }
+                                        }
+                                    });
+                                });
+                            ui.add_space(10.0);
+                            let active_status = status.filter(|(which, _, until)| *which == index && now < *until);
+                            let label = match active_status {
+                                Some((_, true, _)) => tl!("Address copied"),
+                                Some((_, false, _)) => tl!("Could not copy address"),
+                                None => tl!("Copy address"),
+                            };
+                            if let Some((_, _, until)) = active_status {
+                                ctx.request_repaint_after(std::time::Duration::from_secs_f64((until - now).max(0.0)));
                             }
-                        }
-                    });
-                    ui.add_space(5.0);
-                    if ui.add_sized(vec2(150.0, TOUCH), egui::Button::new(tl!("Copy address"))).clicked() {
-                        copied = Some(copy_donation_address(app, ctx, entry.address));
-                    }
+                            if donate_copy_button(ui, label).clicked() {
+                                copied = Some((index, copy_donation_address(app, ctx, entry.address).is_ok()));
+                            }
+                        });
                 });
                 ui.add_space(8.0);
             }
-            if let Some(status) = ctx.data(|d| d.get_temp::<String>(donate_status_id())) {
-                ui.label(status);
-            }
         });
     });
-    if let Some(result) = copied {
-        let message = if result.is_ok() { tl!("Address copied") } else { tl!("Could not copy address") };
-        ctx.data_mut(|d| d.insert_temp(donate_status_id(), message.to_owned()));
+    if let Some((index, success)) = copied {
+        ctx.data_mut(|d| d.insert_temp(donate_status_id(), (index, success, now + 1.8)));
         ctx.request_repaint();
     }
     if close || modal.should_close() {
@@ -1853,6 +1941,31 @@ mod tests {
             crate::Services { copy_text: Some(Box::new(|_| Err("clipboard unavailable".into()))), ..Default::default() },
         );
         assert!(copy_donation_address(&app, &egui::Context::default(), DONATION_ADDRESSES[0].address).is_err());
+    }
+
+    #[test]
+    fn donate_dialog_reports_clipboard_error_instead_of_claiming_success() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let services = crate::Services {
+            copy_text: Some(Box::new(|_| Err("clipboard unavailable".to_string()))),
+            ..Default::default()
+        };
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut h = Harness::builder().with_size(vec2(411.0, 800.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) {
+                    donate_dialog(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        set_flag(&h.ctx, donate_open_id(), true);
+        h.run_steps(4);
+        h.get_by_label("Copy address").click();
+        h.run_steps(2);
+        assert!(h.query_by_label("Could not copy address").is_some());
+        assert!(h.query_by_label("Address copied").is_none());
     }
 
     /// Exercise the real phone sheet and a selected text layer, in both orientations. The
