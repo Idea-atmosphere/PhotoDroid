@@ -338,20 +338,22 @@ fn top_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ctx.request_repaint();
                     }
                     ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.add_sized(vec2(100.0, TOUCH), egui::Button::new(tl!("Donate"))).clicked() {
-                            set_flag(&ctx, donate_open_id(), true);
-                            ctx.data_mut(|d| d.remove::<String>(donate_status_id()));
-                            egui::Popup::close_all(&ctx);
-                        }
-                        // Animate only while the settings popup is visible.
-                        let time = ctx.input(|i| i.time);
-                        let beat = ((time * std::f64::consts::TAU / 1.25).sin() * 0.5 + 0.5) as f32;
-                        let size = 15.0 + 4.0 * beat;
-                        let (rect, _) = ui.allocate_exact_size(vec2(24.0, TOUCH), Sense::hover());
-                        icons::paint(ui, rect, "donate-heart", size, egui::Color32::from_rgb(235, 73, 103));
-                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
-                    });
+                    // Animate only while the settings popup is visible. Both the label and
+                    // the heart are inside one blue, touch-sized pill and share its click target.
+                    let time = ctx.input(|i| i.time);
+                    let beat = ((time * std::f64::consts::TAU / 1.25).sin() * 0.5 + 0.5) as f32;
+                    let heart = icons::image("donate-heart", 15.0 + 4.0 * beat, egui::Color32::from_rgb(235, 73, 103));
+                    let donate = egui::Button::new(tl!("Donate"))
+                        .right_text(heart)
+                        .min_size(vec2(136.0, TOUCH))
+                        .corner_radius(22)
+                        .stroke(Stroke::new(1.5, egui::Color32::from_rgb(55, 145, 245)));
+                    if ui.add(donate).clicked() {
+                        set_flag(&ctx, donate_open_id(), true);
+                        ctx.data_mut(|d| d.remove::<String>(donate_status_id()));
+                        egui::Popup::close_all(&ctx);
+                    }
+                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
                 });
                 let _ = ui.add_enabled_ui(can_undo, |ui| {
                     if icons::button(ui, "undo-2", button_size, false, tl!("Undo")).clicked() {
@@ -1822,7 +1824,14 @@ mod tests {
         h.get_by_label("Phone settings").click();
         h.run_steps(2);
         assert!(h.query_by_label("System keyboard").is_some());
-        h.get_by_label("Donate").click();
+        let donate = h.get_by_label("Donate").rect();
+        assert!(donate.width() >= 136.0 && donate.height() >= TOUCH);
+        // The heart end of the pill is part of the same clickable button.
+        let at = egui::pos2(donate.right() - 18.0, donate.center().y);
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.input_mut().events.extend([egui::Event::PointerMoved(at), button(true)]);
+        h.step();
+        h.input_mut().events.push(button(false));
         h.run_steps(3);
         assert!(is_set(&h.ctx, donate_open_id()));
         assert!(h.query_by_label("Gram (TON)").is_some());
