@@ -3,36 +3,12 @@
 
 use egui::{Color32, CornerRadius, Mesh, Pos2, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 
-const HEART_POINTS: usize = 72;
-
-fn heart_outline(center: Pos2, size: f32) -> Vec<Pos2> {
-    let k = size / 32.0;
-    (0..HEART_POINTS)
-        .map(|i| {
-            let a = i as f32 / HEART_POINTS as f32 * std::f32::consts::TAU;
-            let x = 16.0 * a.sin().powi(3);
-            let y = 13.0 * a.cos() - 5.0 * (2.0 * a).cos() - 2.0 * (3.0 * a).cos() - (4.0 * a).cos();
-            pos2(center.x + x * k, center.y - (y + 2.5) * k)
-        })
-        .collect()
-}
-
-pub(crate) fn paint_heart(painter: &egui::Painter, center: Pos2, size: f32) {
-    let points = heart_outline(center, size);
-    let top = Color32::from_rgb(0xff, 0x9a, 0xb5);
-    let bottom = Color32::from_rgb(0xff, 0x2d, 0x55);
-    let middle = top.lerp_to_gamma(bottom, 0.5);
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(pos2(center.x, center.y - 2.5 * size / 32.0), middle);
-    for point in &points {
-        let amount = ((point.y - (center.y - size * 0.5)) / size).clamp(0.0, 1.0);
-        mesh.colored_vertex(*point, top.lerp_to_gamma(bottom, amount));
-    }
-    for i in 0..points.len() as u32 {
-        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % points.len() as u32);
-    }
-    painter.add(Shape::mesh(mesh));
-    painter.add(Shape::closed_line(points, Stroke::new(1.0, middle)));
+/// Both hearts use the same embedded, anti-aliased SVG rather than a concave triangle fan.
+pub(crate) fn paint_heart(ui: &Ui, center: Pos2, size: f32) {
+    let rect = egui::Rect::from_center_size(center, vec2(size, size));
+    egui::Image::new(egui::include_image!("../../../assets/icons/donate-gradient-heart.svg"))
+        .fit_to_exact_size(vec2(size, size))
+        .paint_at(ui, rect);
 }
 
 fn paint_gradient_ring(painter: &egui::Painter, rect: egui::Rect) {
@@ -111,7 +87,7 @@ pub(crate) fn button(ui: &mut Ui) -> Response {
         // Respect an egui style that disables animation; the Android system setting is not read here.
         let animate = ui.style().animation_time > 0.0;
         let scale = if animate { heartbeat(ui.input(|i| i.time)) } else { 1.0 };
-        paint_heart(painter, heart_center, heart_size * scale);
+        paint_heart(ui, heart_center, heart_size * scale);
         if animate {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         }
@@ -135,8 +111,24 @@ mod tests {
     }
 
     #[test]
-    fn gradient_ring_and_heart_are_distinct_meshes() {
+    fn embedded_heart_svg_rasterizes_with_gradient_and_a_complete_center() {
+        let bytes = include_bytes!("../../../assets/icons/donate-gradient-heart.svg");
+        let image = egui_extras::image::load_svg_bytes_with_size(
+            bytes,
+            egui::load::SizeHint::Size { width: 64, height: 64, maintain_aspect_ratio: true },
+            &Default::default(),
+        ).expect("donation heart SVG should render");
+        let pixel = |x: usize, y: usize| image.pixels[y * image.size[0] + x];
+        assert_eq!(pixel(0, 0).a(), 0, "outside the heart is transparent");
+        assert!(pixel(32, 32).a() > 240, "the center of the heart is filled");
+        assert!(pixel(32, 45).a() > 240, "the lower heart is filled");
+        assert_ne!(pixel(32, 32), pixel(32, 45), "heart uses a vertical gradient");
+    }
+
+    #[test]
+    fn gradient_ring_has_both_endpoint_colors() {
         let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
         let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(320.0, 240.0))), ..Default::default() };
         let mut output = ctx.run_ui(input, |ui| {
             let _ = button(ui);
@@ -149,11 +141,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(meshes.len(), 2, "one mesh for the outline and one for the heart");
+        assert!(!meshes.is_empty(), "gradient ring mesh was drawn");
         let ring = meshes[0];
         assert!(ring.vertices.iter().any(|v| v.color == Color32::from_rgb(0x38, 0xbd, 0xf8)));
         assert!(ring.vertices.iter().any(|v| v.color == Color32::from_rgb(0x63, 0x66, 0xf1)));
-        assert_eq!(meshes[1].vertices.len(), HEART_POINTS + 1);
         output.textures_delta.clear();
     }
 }

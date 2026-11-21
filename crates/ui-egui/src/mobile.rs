@@ -476,6 +476,72 @@ fn donate_card_header(ui: &mut egui::Ui, entry: &DonationAddress) {
     }
 }
 
+/// Horizontal finger drags must still work inside the vertically scrolling donation list.
+#[derive(Clone, Default)]
+struct DonateAddressDrag {
+    viewport: Option<egui::Rect>,
+    offset: f32,
+    max_offset: f32,
+    press: Option<egui::Pos2>,
+    press_offset: f32,
+    dragging: bool,
+}
+
+fn donate_address_line(ui: &mut egui::Ui, index: usize, width: f32, address: &str) {
+    let ctx = ui.ctx().clone();
+    let id = egui::Id::unique(("donate-address-drag", index));
+    let mut drag = ctx.data(|d| d.get_temp::<DonateAddressDrag>(id)).unwrap_or_default();
+    let (pressed, down, released, pos) = ui.input(|i| (
+        i.pointer.button_pressed(egui::PointerButton::Primary),
+        i.pointer.button_down(egui::PointerButton::Primary),
+        i.pointer.button_released(egui::PointerButton::Primary),
+        i.pointer.interact_pos(),
+    ));
+    if pressed {
+        drag.press = pos.filter(|p| drag.viewport.is_some_and(|r| r.contains(*p)));
+        drag.press_offset = drag.offset;
+        drag.dragging = false;
+    }
+    if let (Some(start), Some(current)) = (drag.press, pos) {
+        let delta = current - start;
+        if !drag.dragging && delta.x.abs() > 6.0 && delta.x.abs() > delta.y.abs() {
+            drag.dragging = true;
+        } else if !drag.dragging && delta.y.abs() > 6.0 && delta.y.abs() > delta.x.abs() {
+            drag.press = None; // let the parent list handle a vertical gesture
+        }
+    }
+    let mut scroll = egui::ScrollArea::horizontal()
+        .id_salt("donate-address")
+        .max_width(width)
+        .max_height(24.0)
+        .min_scrolled_height(0.0)
+        .auto_shrink([false, true])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+        .scroll_source(egui::scroll_area::ScrollSource::ALL);
+    if let (true, Some(start), Some(current)) = (drag.dragging, drag.press, pos) {
+        scroll = scroll.horizontal_scroll_offset((drag.press_offset - (current.x - start.x)).clamp(0.0, drag.max_offset));
+    }
+    let result = scroll.show(ui, |ui| {
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            let text = RichText::new(address).monospace().size(12.0).color(egui::Color32::from_rgb(56, 189, 248));
+            ui.add(egui::Label::new(text).extend());
+        });
+    });
+    drag.viewport = Some(result.inner_rect);
+    drag.offset = result.state.clamped_offset().x;
+    drag.max_offset = (result.content_size.x - result.inner_rect.width()).max(0.0);
+    if released || (!down && !pressed) {
+        drag.press = None;
+        drag.dragging = false;
+    }
+    #[cfg(test)]
+    ctx.data_mut(|d| d.insert_temp(
+        egui::Id::unique(("test-donate-address-scroll", index)),
+        (result.inner_rect, result.state.clamped_offset().x, result.content_size.x),
+    ));
+    ctx.data_mut(|d| d.insert_temp(id, drag));
+}
+
 fn donate_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !is_set(ctx, donate_open_id()) {
         return;
@@ -503,7 +569,7 @@ fn donate_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let (rect, _) = ui.allocate_exact_size(vec2(18.0, 20.0), Sense::hover());
                         let animate = ui.style().animation_time > 0.0;
                         let scale = if animate { crate::donate_button::heartbeat(now) } else { 1.0 };
-                        crate::donate_button::paint_heart(ui.painter(), rect.center(), 16.0 * scale);
+                        crate::donate_button::paint_heart(ui, rect.center(), 16.0 * scale);
                         if animate { ctx.request_repaint_after(std::time::Duration::from_millis(50)); }
                         ui.label(RichText::new(tl!("Donate")).font(theme::semibold(16.0)).color(egui::Color32::WHITE));
                     });
@@ -536,15 +602,8 @@ fn donate_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                                 .inner_margin(Margin::same(9))
                                 .show(ui, |ui| {
                                     ui.set_width((width - 46.0).max(65.0));
-                                    // Wallet addresses are ASCII; wrap display only, never the copied value.
-                                    let chunk_len = ((ui.available_width() / 7.5).floor() as usize).clamp(8, 16);
-                                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                                        for chunk in entry.address.as_bytes().chunks(chunk_len) {
-                                            if let Ok(line) = std::str::from_utf8(chunk) {
-                                                ui.label(RichText::new(line).monospace().size(12.0).color(egui::Color32::from_rgb(56, 189, 248)));
-                                            }
-                                        }
-                                    });
+                                    // Keep the displayed value one line and the copied value exact.
+                                    donate_address_line(ui, index, (width - 46.0).max(65.0), entry.address);
                                 });
                             ui.add_space(10.0);
                             let active_status = status.filter(|(which, _, until)| *which == index && now < *until);
@@ -1966,6 +2025,40 @@ mod tests {
         h.run_steps(2);
         assert!(h.query_by_label("Could not copy address").is_some());
         assert!(h.query_by_label("Address copied").is_none());
+    }
+
+    #[test]
+    fn donate_address_is_one_line_and_scrolls_with_a_finger() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(320.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) { donate_dialog(app, ui.ctx()); }
+            }, app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        set_flag(&h.ctx, donate_open_id(), true);
+        h.run_steps(4);
+        let text = h.get_by_label(DONATION_ADDRESSES[0].address).rect();
+        assert!(text.height() < 25.0, "address must occupy one line: {text:?}");
+        let id = egui::Id::unique(("test-donate-address-scroll", 0usize));
+        let (viewport, before, content): (egui::Rect, f32, f32) = h.ctx.data(|d| d.get_temp(id)).unwrap();
+        assert!(content > viewport.width() + 10.0, "address should overflow the phone viewport");
+        let from = viewport.center() + vec2(55.0, 0.0);
+        let to = from - vec2(90.0, 0.0);
+        let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+        let pointer = |pressed, pos| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.input_mut().events.extend([touch(egui::TouchPhase::Start, from), egui::Event::PointerMoved(from), pointer(true, from)]);
+        h.step();
+        for step in 1..=6 {
+            let pos = from + (to - from) * (step as f32 / 6.0);
+            h.input_mut().events.extend([touch(egui::TouchPhase::Move, pos), egui::Event::PointerMoved(pos)]);
+            h.step();
+        }
+        h.input_mut().events.extend([touch(egui::TouchPhase::End, to), pointer(false, to), egui::Event::PointerGone]);
+        h.run_steps(2);
+        let (_, after, _): (egui::Rect, f32, f32) = h.ctx.data(|d| d.get_temp(id)).unwrap();
+        assert!(after > before + 10.0, "horizontal drag must scroll the address: {before} -> {after}");
     }
 
     /// Exercise the real phone sheet and a selected text layer, in both orientations. The
