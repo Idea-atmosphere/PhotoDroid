@@ -395,11 +395,23 @@ struct DonationAddress {
     address: &'static str,
 }
 
-const DONATION_ADDRESSES: &[DonationAddress] = &[DonationAddress {
-    label: "Gram (TON)",
-    network: "TON network",
-    address: "UQDivGkSK4EpCBz3Vzs2fDqH8P4Kz2jr9XugYpeqzPrHaHUP",
-}];
+const DONATION_ADDRESSES: &[DonationAddress] = &[
+    DonationAddress {
+        label: "Gram (TON)",
+        network: "TON network",
+        address: "UQDivGkSK4EpCBz3Vzs2fDqH8P4Kz2jr9XugYpeqzPrHaHUP",
+    },
+    DonationAddress {
+        label: "Tron (TRX)",
+        network: "TRON network",
+        address: "TCT4KvunT4vuSZrk9cqQCASj1uff4zpiJV",
+    },
+    DonationAddress {
+        label: "Ethereum (ETH)",
+        network: "Ethereum network",
+        address: "0x272c9eE3b77da2619cA374f771E867268021c756",
+    },
+];
 
 fn donate_open_id() -> egui::Id {
     egui::Id::unique("phone-donate-open")
@@ -419,22 +431,25 @@ fn copy_donation_address(app: &PhotocraftApp, ctx: &egui::Context, address: &str
     }
 }
 
-/// The copy action is one real button (including accessibility and keyboard focus).
-fn donate_copy_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let width = ui.available_width().max(80.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, TOUCH), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
-    let fill = if response.hovered() || response.is_pointer_button_down_on() {
-        egui::Color32::from_rgb(25, 34, 52)
-    } else {
-        egui::Color32::from_rgb(18, 23, 35)
-    };
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(22), fill);
-    crate::donate_button::paint_three_color_ring(ui.painter(), rect, true);
-    if response.has_focus() {
-        ui.painter().rect_stroke(rect.expand(2.0), egui::CornerRadius::same(24), Stroke::new(1.5, egui::Color32::WHITE), egui::StrokeKind::Outside);
+/// The copy icon stays fixed beside the scrolling address and has a full-size touch target.
+fn donate_copy_button(ui: &mut egui::Ui, entry: &DonationAddress) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(TOUCH, TOUCH), Sense::click());
+    let accessible_label = format!("{}: {}", tl!("Copy address"), entry.label);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &accessible_label));
+    if response.hovered() || response.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect.shrink(4.0), egui::CornerRadius::same(8), egui::Color32::from_rgb(25, 34, 52));
     }
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, theme::semibold(14.0), egui::Color32::from_rgb(248, 250, 252));
+    if response.has_focus() {
+        ui.painter().rect_stroke(rect.shrink(2.0), egui::CornerRadius::same(8), Stroke::new(1.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+    }
+    // Two overlapping outlines are the familiar copy symbol. They never change on copy.
+    let c = rect.center();
+    let stroke = Stroke::new(1.7, egui::Color32::from_rgb(125, 211, 252));
+    let back = egui::Rect::from_min_size(c + vec2(-8.0, -9.0), vec2(12.0, 14.0));
+    let front = egui::Rect::from_min_size(c + vec2(-4.0, -5.0), vec2(12.0, 14.0));
+    ui.painter().rect_stroke(back, egui::CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+    ui.painter().rect_filled(front, egui::CornerRadius::same(2), egui::Color32::from_rgb(8, 11, 18));
+    ui.painter().rect_stroke(front, egui::CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
     response
 }
 
@@ -447,12 +462,26 @@ fn donate_card_header(ui: &mut egui::Ui, entry: &DonationAddress) {
     let mut gradient = egui::Mesh::default();
     let left = egui::Color32::from_rgb(18, 38, 55);
     let right = egui::Color32::from_rgb(35, 26, 52);
-    gradient.colored_vertex(rect.left_top(), left);
-    gradient.colored_vertex(rect.right_top(), right);
-    gradient.colored_vertex(rect.right_bottom(), right);
-    gradient.colored_vertex(rect.left_bottom(), left);
-    gradient.add_triangle(0, 1, 2);
-    gradient.add_triangle(0, 2, 3);
+    // A convex rounded outline avoids square gradient corners over the rounded card.
+    let radius = 12.0_f32.min(rect.width() * 0.5).min(rect.height() * 0.5);
+    let color_at = |x: f32| left.lerp_to_gamma(right, ((x - rect.left()) / rect.width()).clamp(0.0, 1.0));
+    gradient.colored_vertex(rect.center(), color_at(rect.center().x));
+    let corners = [
+        (rect.right_top() + vec2(-radius, radius), -std::f32::consts::FRAC_PI_2),
+        (rect.right_bottom() + vec2(-radius, -radius), 0.0),
+        (rect.left_bottom() + vec2(radius, -radius), std::f32::consts::FRAC_PI_2),
+        (rect.left_top() + vec2(radius, radius), std::f32::consts::PI),
+    ];
+    const SEGMENTS: usize = 6;
+    for (center, start) in corners {
+        for i in 0..=SEGMENTS {
+            let angle = start + std::f32::consts::FRAC_PI_2 * i as f32 / SEGMENTS as f32;
+            let p = center + vec2(angle.cos(), angle.sin()) * radius;
+            gradient.colored_vertex(p, color_at(p.x));
+        }
+    }
+    let count = (corners.len() * (SEGMENTS + 1)) as u32;
+    for i in 0..count { gradient.add_triangle(0, 1 + i, 1 + (i + 1) % count); }
     ui.painter().add(egui::Shape::mesh(gradient));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 4.0))));
     let tag = |ui: &mut egui::Ui| {
@@ -581,7 +610,7 @@ fn donate_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(8.0);
-        egui::ScrollArea::vertical().id_salt("donate-cards").max_height((ctx.content_rect().height() - 140.0).max(90.0)).show(ui, |ui| {
+        let _cards_scroll = egui::ScrollArea::vertical().id_salt("donate-cards").scroll_source(egui::scroll_area::ScrollSource::ALL).max_height((ctx.content_rect().height() - 140.0).max(90.0)).show(ui, |ui| {
             for (index, entry) in DONATION_ADDRESSES.iter().enumerate() {
                 ui.push_id(index, |ui| {
                     Frame::NONE
@@ -602,27 +631,30 @@ fn donate_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                                 .inner_margin(Margin::same(9))
                                 .show(ui, |ui| {
                                     ui.set_width((width - 46.0).max(65.0));
-                                    // Keep the displayed value one line and the copied value exact.
-                                    donate_address_line(ui, index, (width - 46.0).max(65.0), entry.address);
+                                    ui.allocate_ui_with_layout(vec2(ui.available_width(), TOUCH), Layout::left_to_right(Align::Center), |ui| {
+                                        // Only the text scrolls: the copy icon remains visible at the right edge.
+                                        let text_width = (ui.available_width() - TOUCH - ui.spacing().item_spacing.x).max(20.0);
+                                        donate_address_line(ui, index, text_width, entry.address);
+                                        if donate_copy_button(ui, entry).clicked() {
+                                            copied = Some((index, copy_donation_address(app, ctx, entry.address).is_ok()));
+                                        }
+                                    });
                                 });
-                            ui.add_space(10.0);
                             let active_status = status.filter(|(which, _, until)| *which == index && now < *until);
-                            let label = match active_status {
-                                Some((_, true, _)) => tl!("Address copied"),
-                                Some((_, false, _)) => tl!("Could not copy address"),
-                                None => tl!("Copy address"),
-                            };
-                            if let Some((_, _, until)) = active_status {
+                            if let Some((_, success, until)) = active_status {
+                                ui.add_space(4.0);
+                                let label = if success { tl!("Address copied") } else { tl!("Could not copy address") };
+                                let color = if success { egui::Color32::from_rgb(134, 239, 172) } else { egui::Color32::from_rgb(252, 165, 165) };
+                                ui.label(RichText::new(label).size(11.0).color(color));
                                 ctx.request_repaint_after(std::time::Duration::from_secs_f64((until - now).max(0.0)));
-                            }
-                            if donate_copy_button(ui, label).clicked() {
-                                copied = Some((index, copy_donation_address(app, ctx, entry.address).is_ok()));
                             }
                         });
                 });
                 ui.add_space(8.0);
             }
         });
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("test-donate-cards-scroll"), (_cards_scroll.inner_rect, _cards_scroll.state.clamped_offset().y, _cards_scroll.content_size.y)));
     });
     if let Some((index, success)) = copied {
         ctx.data_mut(|d| d.insert_temp(donate_status_id(), (index, success, now + 1.8)));
@@ -1983,7 +2015,7 @@ mod tests {
         assert!(is_set(&h.ctx, donate_open_id()));
         assert!(h.query_by_label("Gram (TON)").is_some());
         assert!(h.query_by_label("TON network").is_some());
-        h.get_by_label("Copy address").click();
+        h.get_by_label("Copy address: Gram (TON)").click();
         h.run_steps(2);
         assert_eq!(*copied.lock().unwrap(), "UQDivGkSK4EpCBz3Vzs2fDqH8P4Kz2jr9XugYpeqzPrHaHUP");
         assert!(h.query_by_label("Address copied").is_some());
@@ -2021,10 +2053,63 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         set_flag(&h.ctx, donate_open_id(), true);
         h.run_steps(4);
-        h.get_by_label("Copy address").click();
+        h.get_by_label("Copy address: Gram (TON)").click();
         h.run_steps(2);
         assert!(h.query_by_label("Could not copy address").is_some());
         assert!(h.query_by_label("Address copied").is_none());
+    }
+
+    #[test]
+    fn donate_three_addresses_copy_exactly_after_scrolling_the_list() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        use std::sync::{Arc, Mutex};
+        let copied = Arc::new(Mutex::new(String::new()));
+        let sink = Arc::clone(&copied);
+        let services = crate::Services {
+            copy_text: Some(Box::new(move |value| { *sink.lock().unwrap() = value.to_owned(); Ok(()) })),
+            ..Default::default()
+        };
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut h = Harness::builder().with_size(vec2(411.0, 1200.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| { if fonts_bound(ui.ctx()) { donate_dialog(app, ui.ctx()); } }, app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        set_flag(&h.ctx, donate_open_id(), true);
+        h.run_steps(5);
+        let entries = [
+            ("Gram (TON)", "UQDivGkSK4EpCBz3Vzs2fDqH8P4Kz2jr9XugYpeqzPrHaHUP"),
+            ("Tron (TRX)", "TCT4KvunT4vuSZrk9cqQCASj1uff4zpiJV"),
+            ("Ethereum (ETH)", "0x272c9eE3b77da2619cA374f771E867268021c756"),
+        ];
+        for (index, (name, address)) in entries.into_iter().enumerate() {
+            assert_eq!(DONATION_ADDRESSES[index].address, address);
+            let label = format!("Copy address: {name}");
+            let id = egui::Id::unique("test-donate-cards-scroll");
+            let (viewport, _, _): (egui::Rect, f32, f32) = h.ctx.data(|d| d.get_temp(id).unwrap());
+            if index > 0 {
+                let from = egui::pos2(viewport.left() + 12.0, viewport.bottom() - 30.0);
+                let to = from - vec2(0.0, 180.0_f32.min(viewport.height() - 40.0));
+                let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+                let button = |pressed, pos| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+                h.input_mut().events.extend([touch(egui::TouchPhase::Start, from), egui::Event::PointerMoved(from), button(true, from)]);
+                h.step();
+                for step in 1..=8 {
+                    let pos = from + (to - from) * (step as f32 / 8.0);
+                    h.input_mut().events.extend([touch(egui::TouchPhase::Move, pos), egui::Event::PointerMoved(pos)]);
+                    h.step();
+                }
+                h.input_mut().events.extend([touch(egui::TouchPhase::End, to), button(false, to), egui::Event::PointerGone]);
+                h.run_steps(3);
+            }
+            let (viewport, _, _): (egui::Rect, f32, f32) = h.ctx.data(|d| d.get_temp(id).unwrap());
+            let button = h.get_by_label(&label);
+            let rect = button.rect();
+            assert!(rect.width() >= TOUCH && rect.height() >= TOUCH && viewport.contains(rect.center()));
+            button.click();
+            h.run_steps(3);
+            assert_eq!(&*copied.lock().unwrap(), address);
+            assert!(h.query_by_label(&label).is_some(), "copy icon must remain after copying");
+        }
     }
 
     #[test]
@@ -2039,6 +2124,7 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         set_flag(&h.ctx, donate_open_id(), true);
         h.run_steps(4);
+        let copy_before = h.get_by_label("Copy address: Gram (TON)").rect();
         let text = h.get_by_label(DONATION_ADDRESSES[0].address).rect();
         assert!(text.height() < 25.0, "address must occupy one line: {text:?}");
         let id = egui::Id::unique(("test-donate-address-scroll", 0usize));
@@ -2059,6 +2145,7 @@ mod tests {
         h.run_steps(2);
         let (_, after, _): (egui::Rect, f32, f32) = h.ctx.data(|d| d.get_temp(id)).unwrap();
         assert!(after > before + 10.0, "horizontal drag must scroll the address: {before} -> {after}");
+        assert_eq!(copy_before, h.get_by_label("Copy address: Gram (TON)").rect(), "copy button must stay fixed");
     }
 
     /// Exercise the real phone sheet and a selected text layer, in both orientations. The
