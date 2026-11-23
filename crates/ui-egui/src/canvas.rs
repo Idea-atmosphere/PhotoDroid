@@ -434,6 +434,9 @@ fn paint_canvas(
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],
         };
+        if primary && app.phone_layout && app.virtual_mouse.magnifier_on() {
+            crate::virtual_mouse::record_loupe_gpu(ctx, rect, params);
+        }
         paint_gpu_view(painter, rect, params, &pattern);
     } else if gpu_ok && viewport_pages::show(app, ctx, idx, &xf, view.zoom) {
         // Too large for the document's texture set: the pages in view, rendered in the background.
@@ -457,6 +460,9 @@ fn paint_canvas(
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],
         };
+        if primary && app.phone_layout && app.virtual_mouse.magnifier_on() {
+            crate::virtual_mouse::record_loupe_gpu(ctx, rect, params);
+        }
         paint_gpu_view(painter, rect, params, &pattern);
     } else if gpu_ok && ensure_gpu(app, ctx, idx, redraw_focus(&target_xf, &xf)) {
         on_gpu = true;
@@ -483,6 +489,9 @@ fn paint_canvas(
             app.navigator_gpu.insert(doc.id, params);
         } else {
             app.navigator_gpu.remove(&doc.id);
+        }
+        if primary && app.phone_layout && app.virtual_mouse.magnifier_on() {
+            crate::virtual_mouse::record_loupe_gpu(ctx, rect, params);
         }
         paint_gpu_view(painter, rect, params, &pattern);
     } else {
@@ -2099,6 +2108,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         target_xf,
         pixel_grid,
     };
+    let loupe_capture = if primary && app.phone_layout {
+        let point = app.virtual_mouse.active_loupe_point(&ctx, rect);
+        crate::virtual_mouse::begin_loupe_capture(&ctx, &painter, point)
+    } else {
+        None
+    };
     let painted = if paint_after_input { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
     let img_rect = xf.doc_rect(doc.bounds());
 
@@ -2343,6 +2358,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         paint_primary_overlays(app, ui, &mut view, &input, ants);
     } else {
         painter.extend(ants);
+    }
+    if primary && app.phone_layout {
+        crate::virtual_mouse::finish_loupe_capture(&ctx, &painter, loupe_capture);
     }
     let tail = CanvasTailInput {
         ctx: &ctx,
@@ -2910,6 +2928,25 @@ mod lasso_preview_tests {
         app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.sync_views();
         app
+    }
+
+    #[test]
+    fn virtual_mouse_loupe_captures_real_live_lasso_path() {
+        let mut app = document();
+        app.ui.tool = Tool::Lasso;
+        app.drag = Some(Drag::new(Tool::Lasso, [80.0, 90.0], vec![[80.0, 90.0, 1.0], [100.0, 100.0, 1.0], [115.0, 110.0, 1.0]], egui::Modifiers::NONE, false));
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            let painter = ui.painter();
+            let capture = crate::virtual_mouse::begin_loupe_capture(&ctx, painter, Some(pos2(100.0, 100.0)));
+            draw_drag_preview(&mut app, painter, &xf());
+            crate::virtual_mouse::finish_loupe_capture(&ctx, painter, capture);
+            let captured = crate::virtual_mouse::captured_loupe_shapes(&ctx);
+            assert!(captured.iter().any(|item| matches!(&item.shape, egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(Color32::BLACK))),
+                "the lasso's actual live path must be included in the current frame");
+        });
+        output.textures_delta.clear();
     }
 
     /// #7495: as in Photoshop, the Lasso's, Polygonal Lasso's and Magnetic Lasso's outline is a

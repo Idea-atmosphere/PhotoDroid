@@ -169,7 +169,6 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     menu(app, ui.ctx());
     donate_dialog(app, ui.ctx());
-    app.virtual_mouse.overlay(ui.ctx());
 }
 
 /// Sanitizes raw touch and pointer events on the phone before `egui::Context::begin_pass` runs:
@@ -2085,10 +2084,17 @@ mod tests {
             assert_eq!(DONATION_ADDRESSES[index].address, address);
             let label = format!("Copy address: {name}");
             let id = egui::Id::unique("test-donate-cards-scroll");
-            let (viewport, _, _): (egui::Rect, f32, f32) = h.ctx.data(|d| d.get_temp(id).unwrap());
-            if index > 0 {
-                let from = egui::pos2(viewport.left() + 12.0, viewport.bottom() - 30.0);
-                let to = from - vec2(0.0, 180.0_f32.min(viewport.height() - 40.0));
+            // The visible status text and fonts change card heights. Do not assume a single
+            // fixed-length swipe is enough: keep swiping until this button is wholly visible.
+            for _ in 0..6 {
+                let (viewport, _, _): (egui::Rect, f32, f32) = h.ctx.data(|d| d.get_temp(id).unwrap());
+                let target = h.get_by_label(&label).rect().center();
+                if viewport.shrink2(vec2(0.0, TOUCH * 0.5)).contains(target) { break; }
+                let upward = target.y > viewport.center().y;
+                let y = if upward { viewport.bottom() - 30.0 } else { viewport.top() + 30.0 };
+                let from = egui::pos2(viewport.left() + 40.0, y);
+                let distance = 180.0_f32.min(viewport.height() - 60.0).max(1.0);
+                let to = from + vec2(0.0, if upward { -distance } else { distance });
                 let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
                 let button = |pressed, pos| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
                 h.input_mut().events.extend([touch(egui::TouchPhase::Start, from), egui::Event::PointerMoved(from), button(true, from)]);
@@ -2104,7 +2110,8 @@ mod tests {
             let (viewport, _, _): (egui::Rect, f32, f32) = h.ctx.data(|d| d.get_temp(id).unwrap());
             let button = h.get_by_label(&label);
             let rect = button.rect();
-            assert!(rect.width() >= TOUCH && rect.height() >= TOUCH && viewport.contains(rect.center()));
+            assert!(rect.width() >= TOUCH && rect.height() >= TOUCH && viewport.shrink2(vec2(0.0, TOUCH * 0.5)).contains(rect.center()),
+                "{name} copy button {rect:?} not fully reachable in {viewport:?}");
             button.click();
             h.run_steps(3);
             assert_eq!(&*copied.lock().unwrap(), address);
