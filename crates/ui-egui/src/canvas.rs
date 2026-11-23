@@ -28,6 +28,7 @@ mod gesture;
 pub mod gpu_canvas;
 pub mod guide_select;
 pub mod layer_pick_ui;
+mod loupe_contrast;
 pub mod move_ui;
 mod navigator;
 pub mod outline;
@@ -2360,6 +2361,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         painter.extend(ants);
     }
     if primary && app.phone_layout {
+        // Compute contrast off the UI thread: sampling can composite expensive effects.
+        let pixel = loupe_capture.and_then(|(_, point)| {
+            let state = &app.session.documents()[idx];
+            loupe_contrast::pixel(&ctx, state.doc.clone(), state.revision, xf.to_doc(point))
+        });
+        crate::virtual_mouse::set_loupe_marker_pixel(&ctx, pixel);
         crate::virtual_mouse::finish_loupe_capture(&ctx, &painter, loupe_capture);
     }
     let tail = CanvasTailInput {

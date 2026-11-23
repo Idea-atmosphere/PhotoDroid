@@ -407,6 +407,64 @@ fn the_magnifier_works_without_the_pointer_and_outlasts_it() {
 }
 
 #[test]
+fn loupe_marker_is_white_on_dark_and_black_on_light() {
+    assert_eq!(loupe_marker_color([0.0, 0.0, 0.0, 1.0]), Color32::WHITE);
+    assert_eq!(loupe_marker_color([1.0, 1.0, 1.0, 1.0]), Color32::BLACK);
+    assert_eq!(loupe_marker_color([0.1, 0.2, 0.1, 1.0]), Color32::WHITE);
+    assert_eq!(loupe_marker_color([0.9, 0.8, 0.9, 1.0]), Color32::BLACK);
+    assert_eq!(loupe_marker_color([0.0, 0.0, 0.0, 0.0]), Color32::BLACK);
+    assert_eq!(loupe_marker_color([f32::NAN, 0.0, 0.0, 1.0]), Color32::BLACK);
+}
+
+#[test]
+fn the_loupe_stays_on_the_virtual_pointer_after_lift_until_switched_off() {
+    let ctx = egui::Context::default();
+    let mut vm = on();
+    vm.toggle_magnifier(canvas());
+    let p = vm.pos.expect("the pointer has a position");
+    frame(&mut vm, vec![touch(1, TouchPhase::Start, pos2(150.0, 500.0))], 1.0);
+    frame(&mut vm, vec![touch(1, TouchPhase::End, pos2(150.0, 500.0))], 1.1);
+    assert_eq!(vm.active_loupe_point(&ctx, canvas()), Some(p));
+    vm.toggle_magnifier(canvas());
+    assert_eq!(vm.active_loupe_point(&ctx, canvas()), None);
+}
+
+#[test]
+fn the_loupe_keeps_the_last_canvas_touch_after_lift_with_the_pointer_off() {
+    let ctx = egui::Context::default();
+    let mut vm = VirtualMouse::default();
+    vm.toggle_magnifier(canvas());
+    let p = pos2(150.0, 500.0);
+    let input = egui::RawInput { screen_rect: Some(canvas()), events: vec![
+        touch(1, TouchPhase::Start, p), Event::PointerMoved(p),
+        Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+    ], ..Default::default() };
+    let mut output = ctx.run_ui(input, |ui| assert_eq!(vm.active_loupe_point(ui.ctx(), canvas()), Some(p)));
+    output.textures_delta.clear();
+    let input = egui::RawInput { screen_rect: Some(canvas()), events: vec![
+        touch(1, TouchPhase::End, p),
+        Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        Event::PointerGone,
+    ], ..Default::default() };
+    let mut output = ctx.run_ui(input, |ui| assert_eq!(vm.active_loupe_point(ui.ctx(), canvas()), Some(p)));
+    output.textures_delta.clear();
+    vm.toggle_magnifier(canvas());
+    assert_eq!(vm.loupe_last_touch, None, "turning off the loupe clears the saved touch");
+}
+
+#[test]
+fn edge_pan_is_gentle_and_capped_even_at_a_corner() {
+    let r = canvas();
+    assert_eq!(edge_velocity(r.center(), r), Vec2::ZERO);
+    assert!(edge_velocity(pos2(r.right() - 1.0, r.center().y), r).length() <= EDGE_SPEED);
+    assert!(edge_velocity(r.right_bottom(), r).length() <= EDGE_SPEED + 0.001);
+    assert!(EDGE_SPEED <= 90.0, "the former 700 pt/s was far too fast");
+    let near_start = edge_velocity(pos2(r.right() - EDGE + 1.0, r.center().y), r).length();
+    let near_edge = edge_velocity(pos2(r.right() - 1.0, r.center().y), r).length();
+    assert!(near_start < near_edge && near_start < 1.0, "acceleration starts gently");
+}
+
+#[test]
 fn the_loupe_keeps_out_of_the_way_of_the_work() {
     let screen = Rect::from_min_max(pos2(0.0, 0.0), pos2(400.0, 800.0));
     let far = loupe_rect(screen, 48.0, pos2(300.0, 600.0));
@@ -620,4 +678,52 @@ fn loupe_overlay_uses_the_current_canvas_pass() {
         egui::Shape::LineSegment { stroke, .. } if stroke.color == Color32::RED && stroke.width == MAGNIFY)),
         "overlay must display the new canvas shapes in the same pass");
     output.textures_delta.clear();
+}
+
+#[test]
+fn the_loupe_draws_the_new_canvas_pass_after_the_finger_lifts() {
+    let ctx = egui::Context::default();
+    let mut vm = on();
+    vm.toggle_magnifier(canvas());
+    let point = vm.pos.expect("the pointer is on");
+    frame(&mut vm, vec![touch(1, TouchPhase::Start, pos2(150.0, 500.0))], 1.0);
+    frame(&mut vm, vec![touch(1, TouchPhase::End, pos2(150.0, 500.0))], 1.1);
+    assert!(vm.pad.is_none());
+    let input = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+    let mut output = ctx.run_ui(input, |ui| {
+        let painter = ui.painter_at(canvas());
+        let capture = begin_loupe_capture(&ctx, &painter, vm.active_loupe_point(&ctx, canvas()));
+        painter.line_segment([point - vec2(10.0, 0.0), point + vec2(10.0, 0.0)], Stroke::new(1.0, Color32::RED));
+        finish_loupe_capture(&ctx, &painter, capture);
+        vm.overlay(&ctx);
+    });
+    assert!(output.shapes.iter().any(|item| matches!(&item.shape,
+        egui::Shape::LineSegment { stroke, .. } if stroke.color == Color32::RED && stroke.width == MAGNIFY)),
+        "the last location still renders the fresh, magnified canvas pass");
+    output.textures_delta.clear();
+}
+
+#[test]
+fn loupe_draws_the_sampled_colour_and_opposite_halo() {
+    for (pixel, foreground, halo) in [([0.0, 0.0, 0.0, 1.0], Color32::WHITE, Color32::BLACK),
+                                      ([1.0, 1.0, 1.0, 1.0], Color32::BLACK, Color32::WHITE)] {
+        let ctx = egui::Context::default();
+        let point = canvas().center();
+        let input = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            let painter = ui.painter_at(canvas());
+            let capture = begin_loupe_capture(&ctx, &painter, Some(point));
+            finish_loupe_capture(&ctx, &painter, capture);
+            set_loupe_marker_pixel(&ctx, Some(pixel));
+            let frame = ctx.data(|d| d.get_temp::<std::sync::Arc<LoupeFrame>>(loupe_frame_id())).expect("frame");
+            draw_loupe_frame(&ctx, &frame);
+        });
+        let loupe = loupe_rect(canvas(), canvas().top(), point);
+        let strokes: Vec<_> = output.shapes.iter().filter_map(|item| match &item.shape {
+            egui::Shape::Circle(c) if c.center == loupe.center() && c.radius == 5.0 => Some((c.stroke.width, c.stroke.color)),
+            _ => None,
+        }).collect();
+        assert_eq!(strokes, vec![(4.0, halo), (2.0, foreground)]);
+        output.textures_delta.clear();
+    }
 }
