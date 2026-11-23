@@ -363,6 +363,11 @@ impl PhotocraftApp {
                 }
             }
         }
+        // The phone's loupe samples this very pass's canvas and tool overlays, so draw it
+        // after the canvas rather than in the earlier phone chrome pass.
+        if phone {
+            self.virtual_mouse.overlay(&ctx);
+        }
         // The floating editor windows belong to the editor: Home covers them (dialogs and notices
         // below stay).
         if !home {

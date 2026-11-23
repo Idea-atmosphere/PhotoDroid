@@ -419,18 +419,6 @@ fn a_held_drag_at_the_edge_pans_the_picture_and_nowhere_else() {
     assert!(vm.wants_frames(), "and keeps the frames coming");
 }
 
-/// A frame that draws the canvas some other way (a rotated view) forgets the picture the frame before, so the loupe never
-/// samples a picture that is no longer where it was.
-#[test]
-fn a_rotated_frame_forgets_the_picture_the_loupe_samples() {
-    let ctx = egui::Context::default();
-    let img = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(10.0, 10.0));
-    record_view(&ctx, egui::TextureId::Managed(0), img, false);
-    assert!(ctx.data(|d| d.get_temp::<CanvasView>(view_id())).is_some());
-    forget_view(&ctx);
-    assert!(ctx.data(|d| d.get_temp::<CanvasView>(view_id())).is_none());
-}
-
 /// The top bar sits above the canvas (y < 0 here), so a touch on it is the screen's, not the pointer's.
 #[test]
 fn a_finger_on_the_top_bar_is_not_the_pointers() {
@@ -520,4 +508,72 @@ fn the_gain_rises_smoothly_from_fine_to_fast() {
         assert!(g >= last - 1e-6 && g - last < 0.05, "no step in the gain at {i}: {last} -> {g}");
         last = g;
     }
+}
+
+#[test]
+fn loupe_replays_live_tool_shapes_with_clipping_and_discards_old_frames() {
+    let ctx = egui::Context::default();
+    let input = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+    let point = pos2(200.0, 400.0);
+    let mut output = ctx.run_ui(input, |ui| {
+        let painter = ui.painter_at(canvas());
+        let capture = begin_loupe_capture(&ctx, &painter, Some(point));
+        // Two points of a live lasso path and a paint preview, plus one out-of-sample shape.
+        painter.line_segment([pos2(190.0, 395.0), pos2(210.0, 405.0)], Stroke::new(1.0, Color32::RED));
+        painter.circle_filled(point, 3.0, Color32::GREEN);
+        painter.circle_filled(pos2(350.0, 700.0), 3.0, Color32::BLUE);
+        finish_loupe_capture(&ctx, &painter, capture);
+        let frame = ctx.data(|d| d.get_temp::<std::sync::Arc<LoupeFrame>>(loupe_frame_id())).expect("fresh frame");
+        assert_eq!(frame.shapes.len(), 2, "only nearby canvas shapes are replayed");
+        draw_loupe_frame(&ctx, &frame);
+        begin_loupe_capture(&ctx, &painter, None);
+        assert!(ctx.data(|d| d.get_temp::<std::sync::Arc<LoupeFrame>>(loupe_frame_id())).is_none(), "no stale frame after a lift");
+    });
+    let loupe = loupe_rect(canvas(), canvas().top(), point);
+    let expected = [loupe.center() + vec2(-25.0, -12.5), loupe.center() + vec2(25.0, 12.5)];
+    let replayed = output.shapes.iter().find_map(|item| match &item.shape {
+        egui::Shape::LineSegment { points, stroke } if stroke.color == Color32::RED && stroke.width > 2.0 => Some((points, item.clip_rect)),
+        _ => None,
+    }).expect("lasso line is redrawn inside the loupe");
+    assert_eq!(*replayed.0, expected);
+    assert_eq!(replayed.1, loupe, "replayed canvas must not draw outside the loupe");
+    output.textures_delta.clear();
+}
+
+#[test]
+fn gpu_loupe_tracks_the_pointer_through_a_rotated_view() {
+    let params = crate::gpu_canvas::ViewParams {
+        doc: 1, doc_size: [100, 100], zoom: 2.0, center: [30.0, 40.0], rotation: std::f32::consts::FRAC_PI_2,
+        shadow: true, pixel_grid: false, view_key: 7, display: 0, output: 0, hdr: None, offset: [0.0, 0.0],
+    };
+    let canvas = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+    let lens = loupe_gpu_params(params, canvas, canvas.center() + vec2(20.0, 40.0));
+    assert!((lens.center[0] - 50.0).abs() < 0.001);
+    assert!((lens.center[1] - 30.0).abs() < 0.001);
+    assert_eq!(lens.zoom, params.zoom * MAGNIFY);
+    assert_ne!(lens.view_key, params.view_key);
+    assert!(!lens.shadow);
+}
+
+#[test]
+fn loupe_overlay_uses_the_current_canvas_pass() {
+    let ctx = egui::Context::default();
+    let point = pos2(200.0, 400.0);
+    let mut vm = VirtualMouse::default();
+    vm.on = true;
+    vm.magnifier = true;
+    vm.down = true;
+    vm.pos = Some(point);
+    let input = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+    let mut output = ctx.run_ui(input, |ui| {
+        let painter = ui.painter_at(canvas());
+        let capture = begin_loupe_capture(&ctx, &painter, vm.active_loupe_point(&ctx, canvas()));
+        painter.line_segment([point - vec2(10.0, 0.0), point + vec2(10.0, 0.0)], Stroke::new(1.0, Color32::RED));
+        finish_loupe_capture(&ctx, &painter, capture);
+        vm.overlay(&ctx);
+    });
+    assert!(output.shapes.iter().any(|item| matches!(&item.shape,
+        egui::Shape::LineSegment { stroke, .. } if stroke.color == Color32::RED && stroke.width == MAGNIFY)),
+        "overlay must display the new canvas shapes in the same pass");
+    output.textures_delta.clear();
 }

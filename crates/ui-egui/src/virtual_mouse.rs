@@ -29,7 +29,7 @@
 //! moves replace the first finger's pointer events (which egui makes where the finger is), so the canvas gets what a
 //! mouse would send. The events are queued into the frame's input (`raw_input_hook`).
 
-use egui::{Color32, Event, Id, LayerId, Modifiers, Order, Pos2, PointerButton, Rect, Stroke, TextureId, TouchId, TouchPhase, Vec2, pos2, vec2};
+use egui::{Color32, Event, Id, LayerId, Modifiers, Order, Pos2, PointerButton, Rect, Stroke, TouchId, TouchPhase, Vec2, pos2, vec2};
 
 use crate::icons;
 use crate::theme::Tokens;
@@ -101,15 +101,6 @@ pub struct Processed {
     pub events: Vec<Event>,
     /// Whether the pointer clicked in it (a press, which a held modifier key is spent by).
     pub clicked: bool,
-}
-
-/// The canvas picture as it was drawn this frame: its texture, where it is drawn, and whether it is mirrored. The
-/// loupe samples it.
-#[derive(Clone, Copy, Debug)]
-struct CanvasView {
-    tex: TextureId,
-    img: Rect,
-    flip: bool,
 }
 
 /// The time, the canvas, and the modifiers of one frame's processing.
@@ -577,13 +568,12 @@ impl VirtualMouse {
     /// the drag lock is on, with a padlock beside it while the lock is on), and the loupe when the magnifier is on and a
     /// finger is working. The dot is painted last, so that the arrow's tip does not cover it.
     pub fn overlay(&self, ctx: &egui::Context) {
-        if self.magnifier
-            && !self.covered
-            && let Some(p) = self.loupe_point(ctx)
-            && let Some(view) = ctx.data(|d| d.get_temp::<CanvasView>(view_id()))
-            && view.img.contains(p)
+        if self.magnifier && !self.covered
+            && let Some(frame) = ctx.data(|d| d.get_temp::<std::sync::Arc<LoupeFrame>>(loupe_frame_id()))
+            && frame.pass == ctx.cumulative_pass_nr()
+            && self.loupe_point(ctx) == Some(frame.point)
         {
-            draw_loupe(ctx, p, view);
+            draw_loupe_frame(ctx, &frame);
         }
         let Some(p) = self.shown_at() else { return };
         let t = Tokens::get(ctx);
@@ -612,6 +602,15 @@ impl VirtualMouse {
         painter.circle_stroke(p, 3.0, Stroke::new(1.0, Color32::from_black_alpha(200)));
     }
 
+    /// The current canvas sample point, only while the magnifier is actually in use.
+    pub(crate) fn active_loupe_point(&self, ctx: &egui::Context, canvas: Rect) -> Option<Pos2> {
+        if self.magnifier && !self.covered {
+            self.loupe_point(ctx).filter(|p| canvas.contains(*p))
+        } else {
+            None
+        }
+    }
+
     /// What the loupe shows: the pointer's place while a finger moves it or its button is down, or, with the pointer
     /// off, the finger on the canvas. Nothing while no finger works, so the loupe hides the picture only when it helps.
     fn loupe_point(&self, ctx: &egui::Context) -> Option<Pos2> {
@@ -620,21 +619,6 @@ impl VirtualMouse {
         }
         ctx.input(|i| (i.any_touches() && i.pointer.primary_down()).then(|| i.pointer.latest_pos()).flatten())
     }
-}
-
-/// Records the canvas picture as it is drawn this frame, for the loupe. The canvas calls it where it draws the picture.
-pub fn record_view(ctx: &egui::Context, tex: TextureId, img: Rect, flip: bool) {
-    ctx.data_mut(|d| d.insert_temp(view_id(), CanvasView { tex, img, flip }));
-}
-
-/// Forgets the picture recorded before. A frame that draws the canvas some other way (a rotated view) has none for the
-/// loupe, so the loupe must not sample the last one.
-pub fn forget_view(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<CanvasView>(view_id()));
-}
-
-fn view_id() -> Id {
-    Id::unique("virtual-mouse-canvas-view")
 }
 
 /// Where the loupe goes on `screen`: the top-left corner under the top bar (`top`), or the top-right one when the
@@ -648,29 +632,97 @@ fn loupe_rect(screen: Rect, top: f32, p: Pos2) -> Rect {
     Rect::from_min_size(pos2((screen.right() - LOUPE_MARGIN - LOUPE).max(screen.left()), y), vec2(LOUPE, LOUPE))
 }
 
-/// The loupe: the canvas around the point, enlarged by [`MAGNIFY`], in a corner of the screen ([`loupe_rect`]), with a
-/// ring on the point's place. Where the sample reaches past the picture, the loupe stays white there.
-fn draw_loupe(ctx: &egui::Context, p: Pos2, view: CanvasView) {
+/// One frame's canvas commands, clipped to the sample. Never reuse a previous frame.
+#[derive(Clone)]
+struct LoupeFrame {
+    pass: u64,
+    point: Pos2,
+    sample: Rect,
+    shapes: Vec<egui::epaint::ClippedShape>,
+    gpu: Option<(Rect, crate::gpu_canvas::ViewParams)>,
+}
+
+fn loupe_frame_id() -> Id { Id::unique("virtual-mouse-loupe-frame") }
+fn loupe_gpu_id() -> Id { Id::unique("virtual-mouse-loupe-gpu") }
+
+/// Start tracking this canvas layer only when a finger actually needs the loupe.
+pub(crate) fn begin_loupe_capture(ctx: &egui::Context, painter: &egui::Painter, point: Option<Pos2>) -> Option<(usize, Pos2)> {
+    ctx.data_mut(|d| { d.remove::<std::sync::Arc<LoupeFrame>>(loupe_frame_id()); d.remove::<(Rect, crate::gpu_canvas::ViewParams)>(loupe_gpu_id()); });
+    point.map(|p| {
+        let count = ctx.graphics(|g| g.get(painter.layer_id()).map_or(0, |list| list.all_entries().len()));
+        (count, p)
+    })
+}
+
+/// The GPU canvas uses a custom callback which cannot be scaled like ordinary egui shapes.
+pub(crate) fn record_loupe_gpu(ctx: &egui::Context, rect: Rect, params: crate::gpu_canvas::ViewParams) {
+    ctx.data_mut(|d| d.insert_temp(loupe_gpu_id(), (rect, params)));
+}
+
+/// Custom GPU callbacks have their own coordinate system and cannot be replayed by egui's
+/// shape transform. The document callback is recorded separately; drop any nested callbacks too.
+fn without_callbacks(shape: egui::Shape) -> Option<egui::Shape> {
+    match shape {
+        egui::Shape::Callback(_) => None,
+        egui::Shape::Vec(shapes) => {
+            let shapes: Vec<_> = shapes.into_iter().filter_map(without_callbacks).collect();
+            (!shapes.is_empty()).then_some(egui::Shape::Vec(shapes))
+        }
+        other => Some(other),
+    }
+}
+
+/// Copy only visible canvas commands painted during this pass, not the app's floating UI.
+pub(crate) fn finish_loupe_capture(ctx: &egui::Context, painter: &egui::Painter, capture: Option<(usize, Pos2)>) {
+    let Some((start, point)) = capture else { return };
+    let sample = Rect::from_center_size(point, vec2(LOUPE / MAGNIFY, LOUPE / MAGNIFY));
+    let shapes = ctx.graphics(|g| {
+        g.get(painter.layer_id()).map(|list| list.all_entries().skip(start)
+            .filter(|clipped| clipped.clip_rect.intersects(sample)
+                && (clipped.transform_after_tessellation * clipped.shape.visual_bounding_rect()).intersects(sample))
+            .filter_map(|clipped| without_callbacks(clipped.shape.clone()).map(|shape| egui::epaint::ClippedShape { shape, ..clipped.clone() }))
+            .collect()).unwrap_or_default()
+    });
+    let gpu = ctx.data(|d| d.get_temp::<(Rect, crate::gpu_canvas::ViewParams)>(loupe_gpu_id()));
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(loupe_frame_id(), std::sync::Arc::new(LoupeFrame { pass, point, sample, shapes, gpu })));
+}
+
+#[cfg(test)]
+pub(crate) fn captured_loupe_shapes(ctx: &egui::Context) -> Vec<egui::epaint::ClippedShape> {
+    ctx.data(|d| d.get_temp::<std::sync::Arc<LoupeFrame>>(loupe_frame_id()))
+        .map_or_else(Vec::new, |frame| frame.shapes.clone())
+}
+
+fn loupe_gpu_params(mut params: crate::gpu_canvas::ViewParams, canvas: Rect, point: Pos2) -> crate::gpu_canvas::ViewParams {
+    let offset = (point - canvas.center()) / params.zoom;
+    let (sin, cos) = params.rotation.sin_cos();
+    params.center[0] += offset.x * cos + offset.y * sin;
+    params.center[1] += -offset.x * sin + offset.y * cos;
+    params.zoom *= MAGNIFY;
+    params.shadow = false;
+    params.view_key = Id::unique(("virtual-mouse-loupe", params.view_key)).value();
+    params
+}
+
+/// Replay the same canvas and tool overlays at loupe scale, keeping their original clips.
+fn draw_loupe_frame(ctx: &egui::Context, frame: &LoupeFrame) {
     let screen = ctx.viewport_rect();
     let top = crate::mobile::top_bar_rect(ctx).map_or(screen.top(), |r| r.bottom());
-    let loupe = loupe_rect(screen, top, p);
+    let loupe = loupe_rect(screen, top, frame.point);
     let painter = ctx.layer_painter(LayerId::new(Order::Debug, Id::unique("virtual-mouse-loupe")));
     painter.rect_filled(loupe, 8.0, Color32::WHITE);
-    let side = LOUPE / MAGNIFY;
-    let sample = Rect::from_center_size(p, vec2(side, side));
-    let shown = sample.intersect(view.img);
-    if shown.width() > 0.0 && shown.height() > 0.0 {
-        let to_loupe = |x: Pos2| loupe.min + (x - sample.min) * MAGNIFY;
-        let dst = Rect::from_min_max(to_loupe(shown.min), to_loupe(shown.max));
-        let picture = |x: Pos2| vec2((x.x - view.img.left()) / view.img.width(), (x.y - view.img.top()) / view.img.height());
-        let (a, b) = (picture(shown.min), picture(shown.max));
-        // A mirrored picture is sampled mirrored, as the canvas draws it.
-        let uv = if view.flip {
-            Rect::from_min_max(pos2(1.0 - a.x, a.y), pos2(1.0 - b.x, b.y))
-        } else {
-            Rect::from_min_max(pos2(a.x, a.y), pos2(b.x, b.y))
-        };
-        painter.image(view.tex, dst, uv, Color32::WHITE);
+    if let Some((canvas, params)) = frame.gpu {
+        let clipped = painter.with_clip_rect(loupe);
+        crate::gpu_canvas::GpuCanvas::paint(&clipped, loupe, loupe_gpu_params(params, canvas, frame.point));
+    }
+    let transform = egui::emath::TSTransform::new(loupe.min.to_vec2() - frame.sample.min.to_vec2() * MAGNIFY, MAGNIFY);
+    for clipped in &frame.shapes {
+        let clip = transform * clipped.clip_rect.intersect(frame.sample);
+        let mut shape = clipped.shape.clone();
+        shape.transform(clipped.transform_after_tessellation);
+        shape.transform(transform);
+        painter.with_clip_rect(clip.intersect(loupe)).add(shape);
     }
     painter.rect_stroke(loupe, 8.0, Stroke::new(2.0, Color32::from_gray(60)), egui::StrokeKind::Outside);
     painter.circle_stroke(loupe.center(), 5.0, Stroke::new(2.0, Color32::from_black_alpha(200)));
