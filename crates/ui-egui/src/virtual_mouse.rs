@@ -7,10 +7,10 @@
 //! - A tap (a finger that lifts within [`TAP_SECS`] without moving more than [`TAP_SLOP`]) clicks where the pointer
 //!   was when the finger touched down, so the finger's small wobble during the tap does not nudge the click. A finger
 //!   that rests and then lifts clicks nothing.
-//! - Two taps in a row ([`DOUBLE_TAP_SECS`] apart) are a double click. A second touch that moves after a tap is a
-//!   drag, and it starts the drag lock: the button stays held across lifts, so a finger that lifts and moves again
-//!   goes on dragging (a stroke goes on), until another double tap ends the lock. While the lock is on, a single tap
-//!   clicks nothing.
+//! - Two taps in a row ([`DOUBLE_TAP_SECS`] apart) are a double click and turn on the drag lock, even without
+//!   movement. A second touch that moves after the first tap also starts the lock as before. The button is held while
+//!   a finger moves and released on lift, with the lock ready for the next movement, until another double tap turns it
+//!   off. While the lock is on, a single tap clicks nothing.
 //! - A lift or a pause (a second finger, a press on the screen, a dialog) lets the button go, so the stroke ends
 //!   where the pointer was, and the next movement starts a new stroke there. The view's change never carries a stroke
 //!   across it. Each stroke is an undo step.
@@ -120,7 +120,7 @@ pub struct VirtualMouse {
     pos: Option<Pos2>,
     /// Where the fingers have put the pointer.
     target: Option<Pos2>,
-    /// The drag lock: from a double tap's drag until the next double tap, the button stays held across lifts.
+    /// The drag lock: from a double tap (or its drag) until the next double tap, movements start held strokes.
     locked: bool,
     /// The button is down, as this mouse has sent it.
     down: bool,
@@ -470,11 +470,9 @@ impl VirtualMouse {
         }
         match g.fingers {
             1 if g.armed => {
-                // The second tap of a double tap. Unless the lock is on, its press and this lift were its click
-                // (see `start`). With the lock on, it ends the lock and clicks nothing.
-                if self.locked {
-                    self.locked = false;
-                }
+                // The second tap toggles the lock even when the finger did not move. If the lock was off,
+                // its press and this lift were the second click (see `start`); if on, neither tap clicked.
+                self.locked = !self.locked;
             }
             1 => {
                 if self.locked {

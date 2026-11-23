@@ -134,14 +134,58 @@ fn a_tap_clicks_where_the_pointer_is() {
 }
 
 #[test]
-fn two_quick_taps_are_a_double_click_and_start_no_lock() {
+fn two_quick_taps_double_click_and_lock_without_moving() {
     let mut vm = on();
     let mut events = tap(&mut vm, 1, pos2(150.0, 500.0), 1.0);
     events.extend(frame(&mut vm, vec![touch(2, TouchPhase::Start, pos2(150.0, 500.0))], 1.2).events);
     events.extend(frame(&mut vm, vec![touch(2, TouchPhase::End, pos2(150.0, 500.0))], 1.3).events);
     let presses = clicks(&events).iter().filter(|(b, pressed)| *b == PointerButton::Primary && *pressed).count();
     assert_eq!(presses, 2, "two clicks in a row: {:?}", clicks(&events));
-    assert!(!vm.locked(), "a double click without a drag starts no lock");
+    assert!(vm.locked(), "a double click locks without having to move the finger");
+    assert!(!vm.held(), "the click ends on lift; the next movement starts a held stroke");
+}
+
+#[test]
+fn a_stationary_double_tap_enables_dragging_and_a_second_one_unlocks() {
+    let mut vm = on();
+    let point = pos2(150.0, 500.0);
+    let first = tap(&mut vm, 1, point, 1.0);
+    assert!(!vm.locked(), "one tap must not lock");
+    assert_eq!(clicks(&first), vec![(PointerButton::Primary, true), (PointerButton::Primary, false)]);
+    let second = tap(&mut vm, 2, point, 1.2);
+    assert!(vm.locked());
+    assert_eq!(clicks(&second), vec![(PointerButton::Primary, true), (PointerButton::Primary, false)]);
+
+    let mut stroke = frame(&mut vm, vec![touch(3, TouchPhase::Start, point)], 2.0).events;
+    assert!(!vm.held(), "touching alone does not draw");
+    stroke.extend(frame(&mut vm, vec![touch(3, TouchPhase::Move, point + vec2(12.0, 0.0))], 2.02).events);
+    assert!(vm.held(), "moving after the double tap starts a held stroke");
+    stroke.extend(frame(&mut vm, vec![touch(3, TouchPhase::End, point + vec2(12.0, 0.0))], 2.1).events);
+    assert_eq!(clicks(&stroke), vec![(PointerButton::Primary, true), (PointerButton::Primary, false)]);
+    assert!(vm.locked() && !vm.held(), "lifting ends the stroke but keeps the lock");
+
+    let mut unlock = tap(&mut vm, 4, point, 3.0);
+    assert!(vm.locked(), "the first tap does not unlock");
+    unlock.extend(tap(&mut vm, 5, point, 3.2));
+    assert!(!vm.locked() && !vm.held());
+    assert!(clicks(&unlock).is_empty(), "the unlocking taps do not draw or click");
+
+    let mut after = frame(&mut vm, vec![touch(6, TouchPhase::Start, point)], 4.0).events;
+    after.extend(frame(&mut vm, vec![touch(6, TouchPhase::Move, point + vec2(12.0, 0.0))], 4.02).events);
+    after.extend(frame(&mut vm, vec![touch(6, TouchPhase::End, point + vec2(12.0, 0.0))], 4.1).events);
+    assert!(clicks(&after).is_empty(), "sliding after unlock must not draw");
+}
+
+#[test]
+fn a_cancelled_second_tap_does_not_enable_lock_or_leave_a_button_down() {
+    let mut vm = on();
+    let point = pos2(150.0, 500.0);
+    tap(&mut vm, 1, point, 1.0);
+    let mut events = frame(&mut vm, vec![touch(2, TouchPhase::Start, point)], 1.2).events;
+    assert!(vm.held());
+    events.extend(frame(&mut vm, vec![touch(2, TouchPhase::Cancel, point)], 1.25).events);
+    assert!(!vm.locked() && !vm.held());
+    assert_eq!(clicks(&events), vec![(PointerButton::Primary, true), (PointerButton::Primary, false)]);
 }
 
 #[test]
