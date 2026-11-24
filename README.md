@@ -1,6 +1,17 @@
 # PhotoDroid: PhotoCraft for Android
 
-[![GitHub release downloads](https://img.shields.io/github/downloads/Idea-atmosphere/PhotoDroid/total?label=downloads)](https://github.com/Idea-atmosphere/PhotoDroid/releases)
+<p align="center" dir="ltr">
+  <a href="https://github.com/Idea-atmosphere/PhotoDroid/releases"><img alt="Total downloads" src="https://img.shields.io/github/downloads/Idea-atmosphere/PhotoDroid/total?style=for-the-badge&amp;logo=android&amp;logoColor=white&amp;label=Downloads&amp;color=3A5AD4"></a>
+  <a href="https://github.com/Idea-atmosphere/PhotoDroid/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Idea-atmosphere/PhotoDroid?style=for-the-badge&amp;label=Latest&amp;color=7A4FD1"></a>
+  <a href="https://github.com/Idea-atmosphere/PhotoDroid/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Idea-atmosphere/PhotoDroid?style=for-the-badge&amp;logo=github&amp;label=Stars&amp;color=2F7D6B"></a>
+  <a href="README.md#licence"><img alt="License: MIT or Apache-2.0" src="https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-5B6690?style=for-the-badge"></a>
+  <a href="https://idea-atmosphere.github.io/Nothing/designs/minimal.html"><img alt="Donate — Gram (TON), Tron (TRX), Ethereum (ETH)" src="https://img.shields.io/badge/Donate-TON%20%C2%B7%20TRX%20%C2%B7%20ETH-E5397A?style=for-the-badge&amp;logo=githubsponsors&amp;logoColor=white"></a>
+</p>
+
+<p align="center" dir="ltr">
+  <img src="assets/screenshots/01.png" alt="PhotoDroid home screen" width="42%">
+  <img src="assets/screenshots/02.png" alt="PhotoDroid editing canvas with virtual mouse and magnifier" width="42%">
+</p>
 
 The badge counts downloads of all GitHub Release assets, not unique users or installs. APK and ZIP downloads are counted separately.
 
