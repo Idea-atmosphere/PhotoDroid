@@ -1426,8 +1426,9 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui, tools_hidden: bool) {
     let t = Tokens::get(&ctx);
     let group = ctx.data(|d| d.get_temp::<Group>(sheet_group_id())).unwrap_or(Group::Layers);
     let screen = ctx.content_rect().size();
-    let (mut pick, mut close) = (None, false);
+    let (mut pick, mut close, mut resize_grip) = (None, false, None);
     let side = side_sheet(screen);
+    let max_height = (screen.y * 0.85).max(260.0) + if tools_hidden { TOOL_STRIP + OPTIONS_ROW } else { 0.0 };
     let panel = if side {
         crate::phone_sheet_layout::reset(ui);
         egui::Panel::right("phone-sheet-side")
@@ -1442,11 +1443,15 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui, tools_hidden: bool) {
         egui::Panel::bottom(crate::phone_sheet_layout::PANEL_ID)
             .resizable(true)
             .default_size((screen.y * 0.4).max(220.0) + if tools_hidden { TOOL_STRIP + OPTIONS_ROW } else { 0.0 })
-            .size_range(220.0..=((screen.y * 0.85).max(260.0) + if tools_hidden { TOOL_STRIP + OPTIONS_ROW } else { 0.0 }))
+            .size_range(220.0..=max_height)
     };
+    let sheet_available_height = ui.available_rect_before_wrap().height();
     let response = panel
         .frame(Frame::NONE.fill(t.dock).inner_margin(Margin::same(6)))
         .show(ui, |ui| {
+            if !side {
+                resize_grip = Some(crate::phone_sheet_layout::grip(ui));
+            }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (g, icon, name) in SHEET_GROUPS {
@@ -1481,9 +1486,17 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui, tools_hidden: bool) {
         });
     if !side {
         crate::phone_sheet_layout::finish(ui, tools_hidden, response.response.rect);
+        if let Some(grip) = &resize_grip {
+            crate::phone_sheet_layout::resize_from_grip(ui, grip, response.response.rect, 220.0, max_height, sheet_available_height);
+        }
     }
     #[cfg(test)]
-    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("test-phone-sheet-rect"), response.response.rect));
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::unique("test-phone-sheet-rect"), response.response.rect);
+        if let Some(grip) = &resize_grip {
+            d.insert_temp(egui::Id::unique("test-phone-sheet-grip"), grip.rect);
+        }
+    });
     if photocraft_doc::diag::enabled() {
         let r = response.response.rect;
         let key = ((r.top().round() as u64) << 40)
@@ -2377,6 +2390,38 @@ mod tests {
         let hidden_again = h.ctx.data(|d| d.get_temp::<egui::Rect>(rect_id)).unwrap();
         assert!((hidden_again.top() - first.top()).abs() < 2.0);
         assert!((hidden_again.height() - first.height()).abs() < 2.0);
+    }
+
+    #[test]
+    fn phone_layer_sheet_resizes_with_its_touch_handle() {
+        use egui_kittest::Harness;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(411.0, 891.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| if fonts_bound(ui.ctx()) { chrome(app, ui); }, app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        set_flag(&h.ctx, sheet_open_id(), true);
+        set_flag(&h.ctx, tool_strip_hidden_id(), true);
+        h.run_steps(5);
+        let rect_id = egui::Id::unique("test-phone-sheet-rect");
+        let before = h.ctx.data(|d| d.get_temp::<egui::Rect>(rect_id)).unwrap();
+        let grip = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("test-phone-sheet-grip"))).unwrap();
+        let from = grip.center();
+        let to = from - vec2(0.0, 80.0);
+        let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        h.input_mut().events.extend([touch(egui::TouchPhase::Start, from), egui::Event::PointerMoved(from), button(from, true)]);
+        h.step();
+        for i in 1..=5 {
+            let pos = from + (to - from) * (i as f32 / 5.0);
+            h.input_mut().events.extend([touch(egui::TouchPhase::Move, pos), egui::Event::PointerMoved(pos)]);
+            h.step();
+        }
+        h.input_mut().events.extend([touch(egui::TouchPhase::End, to), button(to, false), egui::Event::PointerGone]);
+        h.run_steps(4);
+        let after = h.ctx.data(|d| d.get_temp::<egui::Rect>(rect_id)).unwrap();
+        assert!((after.height() - before.height() - 80.0).abs() < 2.0, "{before:?} -> {after:?}");
     }
 
     #[test]
