@@ -145,7 +145,8 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let covered = !app.ui.dialogs.is_empty() || is_set(ui.ctx(), menu_open_id()) || is_set(ui.ctx(), donate_open_id());
     app.virtual_mouse.set_covered(covered);
     virtual_input::panel(app, ui, covered);
-    if is_set(ui.ctx(), tool_strip_hidden_id()) {
+    let tools_hidden = is_set(ui.ctx(), tool_strip_hidden_id());
+    if tools_hidden {
         // The restore tab floats over the bottom edge: it reserves no full-width strip.
         if !covered { collapsed_tool_strip(app, ui); }
     } else {
@@ -156,11 +157,11 @@ pub fn chrome(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // upright it goes above the options, as wide as the screen.
     let side = side_sheet(ui.ctx().content_rect().size());
     if !side {
-        sheet(app, ui);
+        sheet(app, ui, tools_hidden);
     }
     top_bar(app, ui);
     if side {
-        sheet(app, ui);
+        sheet(app, ui, tools_hidden);
     }
     // The floating bars over the canvas: the open lasso outline's, and the virtual mouse's own buttons.
     if !covered {
@@ -1416,32 +1417,34 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// The panels sheet: one dock group at a time, chosen with the icons along its top.
-fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui, tools_hidden: bool) {
     let ctx = ui.ctx().clone();
     if !is_set(&ctx, sheet_open_id()) {
+        crate::phone_sheet_layout::reset(ui);
         return;
     }
     let t = Tokens::get(&ctx);
     let group = ctx.data(|d| d.get_temp::<Group>(sheet_group_id())).unwrap_or(Group::Layers);
     let screen = ctx.content_rect().size();
     let (mut pick, mut close) = (None, false);
-    let panel = if side_sheet(screen) {
+    let side = side_sheet(screen);
+    let panel = if side {
+        crate::phone_sheet_layout::reset(ui);
         egui::Panel::right("phone-sheet-side")
             .resizable(true)
             // Room at least for the row of group icons and the hide button.
             .default_size((screen.x * 0.42).max(300.0))
             .size_range(290.0..=(screen.x * 0.6).max(300.0))
     } else {
-        // Keep separate remembered sizes for the two layouts. The compact-tools layout starts
-        // taller by exactly the freed strip height, and each layout remains manually resizable.
-        let compact = is_set(&ctx, tool_strip_hidden_id());
-        let id = if compact { "phone-sheet-compact-tools" } else { "phone-sheet" };
-        egui::Panel::bottom(id)
+        // One resizable panel for both states. Preserve its top edge when the actual bottom
+        // available to the sheet changes as the tool and options strips are hidden or restored.
+        crate::phone_sheet_layout::prepare(ui, tools_hidden);
+        egui::Panel::bottom(crate::phone_sheet_layout::PANEL_ID)
             .resizable(true)
-            .default_size((screen.y * 0.4).max(220.0) + if compact { TOOL_STRIP + OPTIONS_ROW } else { 0.0 })
-            .size_range(220.0..=(screen.y * 0.85).max(260.0))
+            .default_size((screen.y * 0.4).max(220.0) + if tools_hidden { TOOL_STRIP + OPTIONS_ROW } else { 0.0 })
+            .size_range(220.0..=((screen.y * 0.85).max(260.0) + if tools_hidden { TOOL_STRIP + OPTIONS_ROW } else { 0.0 }))
     };
-    panel
+    let response = panel
         .frame(Frame::NONE.fill(t.dock).inner_margin(Margin::same(6)))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1476,6 +1479,23 @@ fn sheet(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             }
         });
+    if !side {
+        crate::phone_sheet_layout::finish(ui, tools_hidden, response.response.rect);
+    }
+    #[cfg(test)]
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("test-phone-sheet-rect"), response.response.rect));
+    if photocraft_doc::diag::enabled() {
+        let r = response.response.rect;
+        let key = ((r.top().round() as u64) << 40)
+            ^ ((r.bottom().round() as u64) << 24)
+            ^ ((r.width().round() as u64) << 8)
+            ^ ((side as u64) << 1)
+            ^ tools_hidden as u64;
+        photocraft_doc::diag::note_changed(0x5348_4545_54, key, || {
+            format!("phone sheet layout: side={side} tools_hidden={tools_hidden} rect=[{:.1},{:.1}..{:.1},{:.1}] size={:.1}x{:.1}",
+                r.left(), r.top(), r.right(), r.bottom(), r.width(), r.height())
+        });
+    }
     if close {
         set_flag(&ctx, sheet_open_id(), false);
         set_flag(&ctx, tool_strip_hidden_id(), false);
@@ -2171,7 +2191,8 @@ mod tests {
                 |ui, app: &mut PhotocraftApp| {
                     if fonts_bound(ui.ctx()) {
                         set_gestures(ui.ctx(), true);
-                        sheet(app, ui);
+                        let tools_hidden = is_set(ui.ctx(), tool_strip_hidden_id());
+                        sheet(app, ui, tools_hidden);
                     }
                 },
                 app,
@@ -2219,7 +2240,8 @@ mod tests {
             |ui, app: &mut PhotocraftApp| {
                 if fonts_bound(ui.ctx()) {
                     set_gestures(ui.ctx(), true);
-                    sheet(app, ui);
+                    let tools_hidden = is_set(ui.ctx(), tool_strip_hidden_id());
+                    sheet(app, ui, tools_hidden);
                 }
             },
             app,
@@ -2326,6 +2348,35 @@ mod tests {
                 _ => assert!(h.state().ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::LayerStyle)),
             }
         }
+    }
+
+    #[test]
+    fn phone_layer_sheet_keeps_its_top_when_tools_hide_and_reappear() {
+        use egui_kittest::Harness;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(411.0, 891.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if fonts_bound(ui.ctx()) { chrome(app, ui); }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        set_flag(&h.ctx, sheet_open_id(), true);
+        set_flag(&h.ctx, tool_strip_hidden_id(), true);
+        h.run_steps(5);
+        let rect_id = egui::Id::unique("test-phone-sheet-rect");
+        let first = h.ctx.data(|d| d.get_temp::<egui::Rect>(rect_id)).unwrap();
+        set_flag(&h.ctx, tool_strip_hidden_id(), false);
+        h.run_steps(4);
+        let with_tools = h.ctx.data(|d| d.get_temp::<egui::Rect>(rect_id)).unwrap();
+        assert!((first.top() - with_tools.top()).abs() < 2.0);
+        assert!((first.height() - with_tools.height() - TOOL_STRIP - OPTIONS_ROW).abs() < 2.0);
+        set_flag(&h.ctx, tool_strip_hidden_id(), true);
+        h.run_steps(4);
+        let hidden_again = h.ctx.data(|d| d.get_temp::<egui::Rect>(rect_id)).unwrap();
+        assert!((hidden_again.top() - first.top()).abs() < 2.0);
+        assert!((hidden_again.height() - first.height()).abs() < 2.0);
     }
 
     #[test]
