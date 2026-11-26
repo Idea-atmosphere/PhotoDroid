@@ -99,6 +99,9 @@ jobs:
       - name: Test pointer input dispatch policy
         run: bash android/tests/pointer_input_dispatch_test.sh
 
+      - name: Test public folder and font access policy
+        run: bash android/tests/user_folders_test.sh
+
       - name: Install the Android SDK packages
         shell: bash
         run: |

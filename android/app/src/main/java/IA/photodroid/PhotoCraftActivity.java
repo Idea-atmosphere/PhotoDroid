@@ -72,7 +72,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *                                           gave no descriptor)
  *            "error" SEP name SEP message   (a picked file that couldn't be copied)
  *            "done"                         (the picker session is over)
- *            "fonts"                        (Download/PhotoCraft access was granted)
+ *            "fonts"                        (Download/PhotoDroid access was granted)
  *            "text" SEP "" SEP committedText (Unicode text from the system keyboard)
  *            "key" SEP name SEP state,repeat (an editing key from the IME)
  *            "kbd" SEP "" SEP status         (callback name only; never typed content)
@@ -83,7 +83,7 @@ public class PhotoCraftActivity extends NativeActivity {
     private static final int REQUEST_OPEN = 0x5043;
     private static final int REQUEST_USER_TREE = 0x5044;
     private static final int REQUEST_SAVE_AS = 0x5045;
-    private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/PhotoCraft";
+    private static final String EXPORT_FOLDER = UserFolders.root(Environment.DIRECTORY_DOWNLOADS);
     private static final String PROJECT_FOLDER = EXPORT_FOLDER + "/Projects";
     private static final String OUTPUT_FOLDER = EXPORT_FOLDER + "/Output";
     private static final String LOG_FOLDER = EXPORT_FOLDER + "/log";
@@ -158,12 +158,12 @@ public class PhotoCraftActivity extends NativeActivity {
         deleteTree(new File(getCacheDir(), "open"));
 
         // MediaStore creates the public folders without a storage permission. Reading fonts that
-        // another app put there needs a persisted SAF grant for Download/PhotoCraft only.
+        // another app put there needs a persisted SAF grant for Download/PhotoDroid only.
         io.execute(() -> {
             try {
                 ensureUserFolders();
             } catch (Exception e) {
-                events.add(join("error", "", "PhotoCraft folders could not be prepared: " + describe(e)));
+                events.add(join("error", "", "PhotoDroid folders could not be prepared: " + describe(e)));
             }
             runOnUiThread(this::requestUserFolderAccess);
         });
@@ -643,7 +643,7 @@ public class PhotoCraftActivity extends NativeActivity {
         try {
             startActivityForResult(intent, REQUEST_USER_TREE);
         } catch (RuntimeException e) {
-            events.add(join("error", "", "The PhotoCraft folder picker is unavailable: " + describe(e)));
+            events.add(join("error", "", "The PhotoDroid folder picker is unavailable: " + describe(e)));
         }
     }
 
@@ -653,7 +653,7 @@ public class PhotoCraftActivity extends NativeActivity {
             return false;
         }
         Uri tree = Uri.parse(saved);
-        if (!isPhotoCraftTree(tree)) {
+        if (!isPhotoDroidTree(tree)) {
             return false;
         }
         for (UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
@@ -665,10 +665,10 @@ public class PhotoCraftActivity extends NativeActivity {
     }
 
     /** Do not silently bind font loading to a different folder if the user navigates elsewhere. */
-    private static boolean isPhotoCraftTree(Uri tree) {
+    private static boolean isPhotoDroidTree(Uri tree) {
         try {
             String id = DocumentsContract.getTreeDocumentId(tree);
-            return id != null && id.endsWith(":" + EXPORT_FOLDER);
+            return UserFolders.isRootDocumentId(id, Environment.DIRECTORY_DOWNLOADS);
         } catch (RuntimeException e) {
             return false;
         }
@@ -676,17 +676,17 @@ public class PhotoCraftActivity extends NativeActivity {
 
     private void onUserTreeResult(int resultCode, Intent data) {
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
-            events.add(join("error", "", "Fonts in Download/PhotoCraft/Fonts need access to the PhotoCraft folder."));
+            events.add(join("error", "", "Fonts in Download/PhotoDroid/Fonts need access to the PhotoDroid folder."));
             return;
         }
         Uri tree = data.getData();
-        if (!isPhotoCraftTree(tree)) {
-            events.add(join("error", "", "Select Download/PhotoCraft itself, not Download or another folder."));
+        if (!isPhotoDroidTree(tree)) {
+            events.add(join("error", "", "Select Download/PhotoDroid itself, not Download or another folder."));
             return;
         }
         int read = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
         if (read == 0) {
-            events.add(join("error", "", "The PhotoCraft folder did not grant read access."));
+            events.add(join("error", "", "The PhotoDroid folder did not grant read access."));
             return;
         }
         try {
@@ -694,7 +694,7 @@ public class PhotoCraftActivity extends NativeActivity {
             getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putString(KEY_USER_TREE, tree.toString()).apply();
             events.add("fonts");
         } catch (RuntimeException e) {
-            events.add(join("error", "", "PhotoCraft folder access could not be kept: " + describe(e)));
+            events.add(join("error", "", "PhotoDroid folder access could not be kept: " + describe(e)));
         }
     }
 
@@ -789,7 +789,7 @@ public class PhotoCraftActivity extends NativeActivity {
         return fileName(name == null || name.isEmpty() ? "picked file" : name);
     }
 
-    // ---- Public folders, fonts and saving (Download/PhotoCraft) ----
+    // ---- Public folders, fonts and saving (Download/PhotoDroid) ----
 
     /** Create all visible folders even before the first document, font or diagnostic log exists. */
     private void ensureUserFolders() throws IOException {
@@ -880,11 +880,11 @@ public class PhotoCraftActivity extends NativeActivity {
     private synchronized String syncFonts(String argument) throws IOException {
         String saved = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_USER_TREE, "");
         if (saved == null || saved.isEmpty()) {
-            throw new IOException("grant access to Download/PhotoCraft to load user fonts");
+            throw new IOException("grant access to Download/PhotoDroid to load user fonts");
         }
         Uri tree = Uri.parse(saved);
-        if (!isPhotoCraftTree(tree)) {
-            throw new IOException("the saved folder is not Download/PhotoCraft");
+        if (!isPhotoDroidTree(tree)) {
+            throw new IOException("the saved folder is not Download/PhotoDroid");
         }
         File target = new File(argument);
         File parent = target.getParentFile();
@@ -927,7 +927,7 @@ public class PhotoCraftActivity extends NativeActivity {
                 null
         )) {
             if (cursor == null) {
-                throw new IOException("the PhotoCraft folder could not be listed");
+                throw new IOException("the PhotoDroid folder could not be listed");
             }
             while (cursor.moveToNext()) {
                 String name = cursor.getString(1);
@@ -1004,7 +1004,7 @@ public class PhotoCraftActivity extends NativeActivity {
     }
 
     /**
-     * Save the staged file under its name in the requested PhotoCraft subfolder. The argument is
+     * Save the staged file under its name in the requested PhotoDroid subfolder. The argument is
      * name SEP mime SEP stagedPath SEP previousUri, where previousUri is the copy this name was
      * saved to last (empty if none). Returns the new copy's URI.
      */
@@ -1101,7 +1101,7 @@ public class PhotoCraftActivity extends NativeActivity {
         try {
             File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             if (downloads != null) {
-                File folder = new File(downloads, "PhotoCraft");
+                File folder = new File(downloads, UserFolders.NAME);
                 File[] children = folder.listFiles();
                 if (children != null) {
                     for (File child : children) {

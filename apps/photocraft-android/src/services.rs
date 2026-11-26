@@ -3,7 +3,7 @@
 //! Files come in through the system file picker: the activity hands each picked file over (as a
 //! descriptor, or as a copy in app cache) and a reader thread puts its bytes in [`Link::inbox`],
 //! for the UI to open. The UI thread never reads a file itself. Saves go to `Projects` or `Output`
-//! inside `Download/PhotoCraft` through MediaStore (see `PhotoCraftActivity.save`). Preferences, crash recovery and brush
+//! inside `Download/PhotoDroid` through MediaStore (see `PhotoCraftActivity.save`). Preferences, crash recovery and brush
 //! presets live in app-private storage. Anything that needs a desktop facility is left `None`, so
 //! the UI hides or skips it, as it does on the web.
 
@@ -23,8 +23,8 @@ use crate::platform;
 use crate::protocol;
 
 /// Storage used by the Android shell. Recovery, preferences and the temporary font copy stay in
-/// app-private internal storage. The activity mirrors user fonts from `Download/PhotoCraft/Fonts`
-/// into [`Dirs::fonts`], and publishes diagnostic logs to `Download/PhotoCraft/log` through
+/// app-private internal storage. The activity mirrors user fonts from `Download/PhotoDroid/Fonts`
+/// into [`Dirs::fonts`], and publishes diagnostic logs to `Download/PhotoDroid/log` through
 /// MediaStore; neither operation needs a broad storage permission.
 #[derive(Clone)]
 pub struct Dirs {
@@ -63,7 +63,9 @@ impl Dirs {
     }
 
     fn export_index(&self) -> PathBuf {
-        self.root.join("exports.txt")
+        // Previous versions indexed URIs under Download/PhotoCraft. Start a separate index for
+        // Download/PhotoDroid so saving or clearing logs never deletes files in the old folder.
+        self.root.join("exports-photodroid.txt")
     }
 }
 
@@ -193,7 +195,7 @@ fn locked<T>(queue: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// The file dialog service (`Services::file_dialog`). Save has no dialog: the suggested name is
-/// used, in Projects or Output under Download/PhotoCraft. File › Open starts the system picker, and the files it picks come
+/// used, in Projects or Output under Download/PhotoDroid. File › Open starts the system picker, and the files it picks come
 /// back through the inbox to be opened there, so the dialog is answered as cancelled at once. A
 /// command that reads one file (place, scripts, presets, notes) would otherwise open it as a new
 /// document, so it gets a message instead and is cancelled.
@@ -274,7 +276,7 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
             let name = protocol::file_name(path);
             if is_diagnostic_log(&name) {
                 // Keep a second private copy for an unclean shutdown; publish the readable log in
-                // Download/PhotoCraft/log without sending ordinary .txt exports there.
+                // Download/PhotoDroid/log without sending ordinary .txt exports there.
                 // An older queued snapshot must not overwrite an explicit save.
                 if name == crate::crash_report::LOG_NAME {
                     manual_generation.fetch_add(1, Ordering::SeqCst);
@@ -293,7 +295,7 @@ pub fn services(dirs: &Dirs, link: &Link) -> Services {
             let saver = locked(&saver_for_debug);
             crate::crash_report::set_debug_enabled(&debug_root, enabled);
             if !enabled {
-                // Remove logs in Download/PhotoCraft/log and logs written by older versions into
+                // Remove logs in Download/PhotoDroid/log and logs written by older versions into
                 // the export folder itself.
                 saver.remove_logs()?;
             }
@@ -394,10 +396,10 @@ fn is_diagnostic_log_key(key: &str) -> bool {
     is_diagnostic_log(key.strip_prefix("log/").unwrap_or(key))
 }
 
-/// Saves project documents into `Download/PhotoCraft/Projects`, other exports into `Output`, and
+/// Saves project documents into `Download/PhotoDroid/Projects`, other exports into `Output`, and
 /// diagnostic logs into `log`. It remembers the copy each key was saved to, so a second save
 /// replaces that copy instead of adding "name (1)". Bare document keys also retain the previous
-/// root-level URI after an upgrade. Log keys have a `log/` prefix to avoid document collisions.
+/// root-level URI within this folder. Log keys have a `log/` prefix to avoid document collisions.
 struct Saver {
     staging: PathBuf,
     index: PathBuf,
@@ -421,8 +423,8 @@ impl Saver {
             return self.save_to_uri(&name, &uri, bytes);
         }
         let command = if protocol::is_project_file(&name) { "save_project" } else { "save_output" };
-        // Keep the existing bare-name key: after an upgrade, the previous root-level copy is
-        // replaced only after the new copy in Projects/Output is complete.
+        // Reuse the bare-name key within this folder; replace its previous copy only after the
+        // new copy in Projects/Output is complete.
         self.save_as(command, &name, &name, bytes)
     }
 
@@ -515,12 +517,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let index = dir.join("exports.txt");
-        let saver = Saver::new(dir.join("staging"), index.clone());
+        let saver = Saver::new(dir.join("staging"), index.clone(), Arc::default());
         saver.saved.borrow_mut().insert("cat.psd".into(), "content://media/external_primary/downloads/7".into());
         write_atomic(&saver.index, protocol::format_index(&saver.saved.borrow()).as_bytes()).unwrap();
-        let restarted = Saver::new(dir.join("staging"), index);
+        let restarted = Saver::new(dir.join("staging"), index, Arc::default());
         assert_eq!(restarted.saved.borrow().get("cat.psd").map(String::as_str), Some("content://media/external_primary/downloads/7"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_new_folder_uses_a_separate_index_from_the_old_folder() {
+        let dir = std::env::temp_dir().join(format!("photodroid-android-folder-index-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("exports.txt");
+        std::fs::write(&old, "old index remains untouched").unwrap();
+        let dirs = Dirs::new(dir.clone());
+        let index = dirs.export_index();
+        assert_eq!(index, dir.join("exports-photodroid.txt"));
+        let saver = Saver::new(dirs.staging(), index.clone(), Arc::default());
+        assert!(saver.saved.borrow().is_empty(), "old folder URIs must not be used for replacements or log deletion");
+        saver.saved.borrow_mut().insert("cat.psd".into(), "content://media/new".into());
+        write_atomic(&index, protocol::format_index(&saver.saved.borrow()).as_bytes()).unwrap();
+        let restarted = Saver::new(dirs.staging(), index, Arc::default());
+        assert_eq!(restarted.saved.borrow().get("cat.psd").map(String::as_str), Some("content://media/new"));
+        assert_eq!(std::fs::read_to_string(old).unwrap(), "old index remains untouched");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

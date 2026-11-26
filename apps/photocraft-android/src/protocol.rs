@@ -26,7 +26,7 @@ pub enum Event {
     Error { name: String, message: String },
     /// The picker session is over (after its files, if it returned any).
     Done,
-    /// The user granted access to Download/PhotoCraft, so its Fonts directory can be mirrored.
+    /// The user granted access to Download/PhotoDroid, so its Fonts directory can be mirrored.
     FontsChanged,
     /// Committed Unicode text from the system keyboard or its InputConnection.
     Text(String),
@@ -106,7 +106,7 @@ pub fn file_name(path: &str) -> String {
     if trimmed.is_empty() { "PhotoCraft".to_string() } else { trimmed.to_string() }
 }
 
-/// Whether a saved document belongs in `Download/PhotoCraft/Projects` rather than `Output`.
+/// Whether a saved document belongs in `Download/PhotoDroid/Projects` rather than `Output`.
 /// Matching is case-insensitive and uses only the final extension of the sanitized file name.
 pub fn is_project_file(name: &str) -> bool {
     let extension = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default();

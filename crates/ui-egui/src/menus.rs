@@ -196,11 +196,11 @@ mod quick_export_label_tests {
     }
 }
 
-/// The file the diagnostic log is saved as, in `Download/PhotoCraft/log` (see [`save_diagnostic_log`]).
+/// The file the diagnostic log is saved as, in `Download/PhotoDroid/log` (see [`save_diagnostic_log`]).
 const DIAGNOSTIC_LOG: &str = "photocraft-log.txt";
 
 /// Help › Save Diagnostic Log: the kept lines of `photocraft_doc::diag` go to [`DIAGNOSTIC_LOG`], through the
-/// save service (`Download/PhotoCraft/log` on the phone). The item is listed on the phone build only.
+/// save service (`Download/PhotoDroid/log` on the phone). The item is listed on the phone build only.
 fn save_diagnostic_log(app: &mut PhotocraftApp) -> Result<Value, String> {
     let lines = write_diagnostic_log(app)?;
     app.ui.status = format!("Diagnostic log saved as log/{DIAGNOSTIC_LOG}");
@@ -228,7 +228,7 @@ fn log_save_due(since: Option<std::time::Duration>, touching_strip: bool) -> boo
     since.is_none_or(|s| s >= LOG_SAVE_EVERY && (!touching_strip || s >= LOG_SAVE_EVERY * 2))
 }
 
-/// Writes the log to `Download/PhotoCraft/log/photocraft-log.txt` shortly after it changes, so that a change's lines are in
+/// Writes the log to `Download/PhotoDroid/log/photocraft-log.txt` shortly after it changes, so that a change's lines are in
 /// the file without a trip to the menu. Phone only: the desktop keeps no log, and has no save service here.
 pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !photocraft_doc::diag::enabled() || app.services.write.is_none() || !photocraft_doc::diag::take_dirty() {
@@ -265,7 +265,7 @@ pub(crate) fn tick_diagnostic_log(app: &mut PhotocraftApp, ctx: &egui::Context) 
 }
 
 /// Toggles diagnostic `.txt` logging from the phone menu. Turning it on starts recording and immediately
-/// saves `Download/PhotoCraft/log/photocraft-log.txt`; turning it off stops recording, clears the in-memory log,
+/// saves `Download/PhotoDroid/log/photocraft-log.txt`; turning it off stops recording, clears the in-memory log,
 /// and asks the platform service to remove any saved diagnostic `.txt` files.
 pub(crate) fn set_diagnostic_debug(app: &mut PhotocraftApp, enabled: bool) {
     if enabled {
