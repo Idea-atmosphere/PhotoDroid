@@ -1868,7 +1868,7 @@ fn menu_footer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.painter().rect_filled(rect, t.radius_sm, t.hover);
     }
     let detail = if debug_on {
-        "Saving .txt logs in Download/PhotoCraft/log"
+        "Saving .txt logs in Download/PhotoDroid/log"
     } else {
         "Off — .txt log files removed"
     };

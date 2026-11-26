@@ -1,5 +1,5 @@
 //! Keeps the diagnostic log through a crash. The log lives in memory, and the Help menu (and a periodic save) writes it
-//! to `Download/PhotoCraft/log/photocraft-log.txt`. A panic or a kill can come before that write, so the log is also
+//! to `Download/PhotoDroid/log/photocraft-log.txt`. A panic or a kill can come before that write, so the log is also
 //! copied to app-private storage each time it is saved. A panic gets a separate copy, so an older background save
 //! cannot overwrite it. A run marks itself as running at launch and clears the mark when the app is dropped. A launch
 //! that finds the mark saves the last copy and any panic snapshot beside the current log under an unclean-run name.
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// The name the log has in `Download/PhotoCraft/log` (the Help menu's Save Diagnostic Log).
+/// The name the log has in `Download/PhotoDroid/log` (the Help menu's Save Diagnostic Log).
 pub const LOG_NAME: &str = "photocraft-log.txt";
 /// The copy of the log in app-private storage.
 const LAST_COPY: &str = "last-log.txt";

@@ -22,7 +22,7 @@ The badge counts downloads of all GitHub Release assets, not unique users or ins
 adaptations. The shell also differs: instead of a winit window with native dialogs,
 the app runs inside an Android `NativeActivity`, with the system file picker, MediaStore for saves,
 app-private storage for preferences, crash recovery and brush presets, and public
-`Download/PhotoCraft/Projects`, `Output`, `Fonts` and `log` folders.
+`Download/PhotoDroid/Projects`, `Output`, `Fonts` and `log` folders.
 
 > **Status:** CI builds an arm64 APK and runs host and interface tests. Selected features have been
 > tested on an Android device; device coverage is not complete.
@@ -102,7 +102,7 @@ The shared crates also carry Android adaptations. The following notes describe m
   4000). The engine writes one for each text edit (the damage, the effects' reach, the re-render's
   pixels: `type_cmds.rs`), the canvas writes one for the repaint that follows (`canvas.rs`), and a text
   layer's effect key is written when it changes (`compose/src/lib.rs`). The log is on only in the phone
-  build (`lib.rs`). While it changes, it is written to `Download/PhotoCraft/log/photocraft-log.txt` at once and then
+  build (`lib.rs`). While it changes, it is written to `Download/PhotoDroid/log/photocraft-log.txt` at once and then
   at most every two seconds (`menus.rs`, `tick_diagnostic_log`). Help › Save Diagnostic Log (listed on the phone only)
   saves it at once. `record_panic` puts a panic in the log without waiting for its lock (the panic hook uses it).
 - `crates/engine/src/jobs.rs` writes an open's lines to the same log: the bytes read, the decode's time and
@@ -123,20 +123,25 @@ The shared crates also carry Android adaptations. The following notes describe m
 
 At startup PhotoDroid creates these folders through MediaStore:
 
-- `Download/PhotoCraft/Projects/`: PSD, PSB, PSDT, PCRAFT and ORA project files are saved here.
-- `Download/PhotoCraft/Output/`: other exports, including PNG, JPEG, TIFF and text files, are saved here.
-- `Download/PhotoCraft/Fonts/`: put `.ttf`, `.otf`, `.ttc` or `.otc` files here, including inside
+- `Download/PhotoDroid/Projects/`: PSD, PSB, PSDT, PCRAFT and ORA project files are saved here.
+- `Download/PhotoDroid/Output/`: other exports, including PNG, JPEG, TIFF and text files, are saved here.
+- `Download/PhotoDroid/Fonts/`: put `.ttf`, `.otf`, `.ttc` or `.otc` files here, including inside
   nested folders. A small `README.txt` marks the folder before the first font is added. Because a
   file manager's fonts are not owned by PhotoDroid, the system picker asks for read access to the
-  **PhotoCraft** folder: select that folder itself, not all of Download. The grant is persisted for
+  **PhotoDroid** folder: select that folder itself, not all of Download. The grant is persisted for
   later launches; no all-files storage permission is requested. The activity mirrors the fonts to a
   private staging directory and loads them in the background, leaving the originals untouched. Their
   internal family/style names appear in the Text tool's font menus. Restart after adding or replacing
   fonts. Exports and logs still work if the font-folder grant is declined.
-- `Download/PhotoCraft/log/`: the current `photocraft-log.txt` and any
+- `Download/PhotoDroid/log/`: the current `photocraft-log.txt` and any
   `photocraft-log-unclean-*.txt` from a run that did not end normally are written here through
   MediaStore. A small `README.txt` marks this folder too. Turning diagnostic logging off removes only
   the app's diagnostic logs, not this readme or ordinary text exports.
+
+**Upgrading from older versions:** Existing files in `Download/PhotoCraft` are not automatically
+moved or removed. To keep using custom fonts, copy them from the old `Fonts` folder to
+`Download/PhotoDroid/Fonts` and grant access to the new `PhotoDroid` folder. Ordinary saves use the
+new folder; **Save As** can still choose another location.
 
 Crash recovery no longer waits for the ten-minute default interval on Android. Every changed document
 revision is queued on the next UI upkeep pass and written incrementally in the background. If edits
@@ -148,7 +153,7 @@ preference still controls whether recovery is enabled.
 ## Diagnostic log
 
 The phone keeps a log of what the app does (`crates/doc/src/diag.rs`, plus the lines the app writes in
-`apps/photocraft-android/src/`). It is in `Download/PhotoCraft/log/photocraft-log.txt`, written as it changes,
+`apps/photocraft-android/src/`). It is in `Download/PhotoDroid/log/photocraft-log.txt`, written as it changes,
 and Help › Save Diagnostic Log saves it at once. The log has:
 
 - the start of each run, with the version;
@@ -170,8 +175,8 @@ also produces such a file, so it is not proof of a crash.
 
 - Launch, touch editing, the full interface.
 - **File › Open** (and Open As) through the Storage Access Framework. Several files can be picked.
-- Ordinary **Save** and exports use MediaStore: `Download/PhotoCraft/Projects` for PSD/PSB/PSDT/PCRAFT/ORA
-  and `Download/PhotoCraft/Output` for other formats. **Save As** opens the Android system picker so the
+- Ordinary **Save** and exports use MediaStore: `Download/PhotoDroid/Projects` for PSD/PSB/PSDT/PCRAFT/ORA
+  and `Download/PhotoDroid/Output` for other formats. **Save As** opens the Android system picker so the
   user can choose a name and destination without broad storage permission.
 - Preferences, crash recovery (autosave and restore) and brush presets live in app-private storage.
 - Links (Help, and so on) open in the browser.

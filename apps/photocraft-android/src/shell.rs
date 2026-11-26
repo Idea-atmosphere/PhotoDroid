@@ -31,10 +31,10 @@ pub fn run(app: AndroidApp) {
     };
     platform::set_activity(app.activity_as_ptr());
     let dirs = Dirs::new(root);
-    // The activity creates Download/PhotoCraft/Fonts and Download/PhotoCraft/log through
+    // The activity creates Download/PhotoDroid/Fonts and Download/PhotoDroid/log through
     // MediaStore. A persisted, user-granted SAF tree lets its font worker read files that a file
     // manager placed there; no broad all-files permission is requested.
-    log::info!("PhotoCraft user folder: Download/PhotoCraft");
+    log::info!("PhotoCraft user folder: Download/PhotoDroid");
     // The system font scan can take seconds: run it off the UI thread. The user folder is loaded
     // on a second worker once the shared engine exists (see `warm_user_fonts`).
     photocraft_ui_egui::type_tool::warm_fonts();
@@ -128,18 +128,18 @@ fn warm_user_fonts(dir: PathBuf, ctx: egui::Context) {
         let staged = worker_dir.to_string_lossy().into_owned();
         let synced = platform::call("sync_fonts", &staged).and_then(|reply| protocol::parse_reply(&reply));
         if let Err(e) = synced {
-            log::warn!("PhotoCraft could not read Download/PhotoCraft/Fonts: {e}");
+            log::warn!("PhotoCraft could not read Download/PhotoDroid/Fonts: {e}");
             return;
         }
         let engine = photocraft_text::shared();
         let mut engine = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = engine.fonts.load_font_dir(&worker_dir);
         drop(engine);
-        log::info!("PhotoCraft loaded {count} font candidate(s) from Download/PhotoCraft/Fonts");
+        log::info!("PhotoCraft loaded {count} font candidate(s) from Download/PhotoDroid/Fonts");
         ctx.request_repaint();
     });
     if let Err(e) = worker {
-        log::warn!("PhotoCraft could not start the user font scan for Download/PhotoCraft/Fonts: {e}");
+        log::warn!("PhotoCraft could not start the user font scan for Download/PhotoDroid/Fonts: {e}");
     }
 }
 
@@ -166,7 +166,7 @@ struct AndroidShell {
     frame_work: Duration,
     /// App-private storage, where the run's mark is (see `crash_report`).
     root: PathBuf,
-    /// Private staging copy refreshed from Download/PhotoCraft/Fonts by the activity.
+    /// Private staging copy refreshed from Download/PhotoDroid/Fonts by the activity.
     font_dir: PathBuf,
     /// Wakes the UI after the background font scan, including a scan triggered by a new SAF grant.
     font_ctx: egui::Context,
